@@ -1,5 +1,6 @@
 pub(super) mod cpu;
 mod flash;
+pub mod lsa;
 #[cfg(feature = "metal")]
 pub(crate) mod metal_flash_attn;
 mod naive;
@@ -7,6 +8,11 @@ mod sinks;
 mod tiled;
 
 pub(crate) use flash::flash_attn;
+pub use lsa::{
+    build_buckets, build_hierarchy, build_shapes, lsa_sdpa, pca_projections, project, regroup,
+    select_keep_indices, shape_buckets, sparse_gather_sdpa, Buckets, EarlyBudget, Growth,
+    Hierarchy, LearnedProjection, LsaConfig, LsaSessionCache, RotaryLayout, Shapes,
+};
 pub(crate) use naive::{maybe_synchronize, naive_sdpa};
 pub(crate) use sinks::sinks_attn;
 pub(crate) use tiled::tiled_sdpa;

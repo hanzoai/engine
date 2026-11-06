@@ -68,7 +68,8 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
-mod attention;
+pub mod attention;
+pub use attention::{EarlyBudget, LearnedProjection, LsaConfig, LsaSessionCache, RotaryLayout};
 mod diagnostics;
 pub mod diffusion_models;
 pub mod distributed;

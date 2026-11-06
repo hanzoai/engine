@@ -22,8 +22,9 @@ use crate::{
     embeddings::embeddings,
     files::{delete_file, get_file, get_file_content, list_files},
     handlers::{
-        cache, delete_session, get_model_status, get_session, health, metrics, models, put_session,
-        re_isq, reload_model, root, system_doctor, system_info, tune_model, unload_model,
+        cache, delete_lsa_config, delete_session, get_lsa_config, get_model_status, get_session,
+        health, metrics, models, put_session, re_isq, reload_model, root, set_lsa_config,
+        system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
     music_generation::music_generation,
@@ -34,7 +35,7 @@ use crate::{
         ANTHROPIC_MESSAGES_ROUTE, AUDIO_TRANSCRIPTION_ROUTE, CACHE_ROUTE, CANCEL_RESPONSE_ROUTE,
         CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
         FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, LIPSYNC_ROUTE,
-        METRICS_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE, MUSIC_GENERATION_ROUTE,
+        LSA_CONFIG_ROUTE, METRICS_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE, MUSIC_GENERATION_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE, ROUTE_ROUTE,
         ROUTING_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
         SYSTEM_INFO_ROUTE, THREED_CONTENT_ROUTE, THREED_GENERATION_ROUTE, THREED_JOB_ROUTE,
@@ -341,6 +342,12 @@ fn init_router(
         .route(TUNE_MODEL_ROUTE.path, post(tune_model))
         .route(SYSTEM_INFO_ROUTE.path, get(system_info))
         .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
+        .route(
+            LSA_CONFIG_ROUTE.path,
+            get(get_lsa_config)
+                .post(set_lsa_config)
+                .delete(delete_lsa_config),
+        )
         .route(HEALTH_ROUTE.path, get(health))
         .route(METRICS_ROUTE.path, get(metrics))
         .route(CACHE_ROUTE.path, get(cache))

@@ -52,8 +52,13 @@ impl AttentionMask {
     }
 }
 
-mod backends;
+pub mod backends;
 
+pub use backends::lsa::{
+    build_buckets, build_hierarchy, build_shapes, lsa_sdpa, pca_projections, project, regroup,
+    select_keep_indices, shape_buckets, sparse_gather_sdpa, Buckets, EarlyBudget, Growth,
+    Hierarchy, LearnedProjection, LsaConfig, LsaSessionCache, RotaryLayout, Shapes,
+};
 #[allow(unused)]
 pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn, tiled_sdpa};
 
@@ -485,6 +490,22 @@ impl Sdpa {
         // Custom mask from a bidirectional one without inspecting the tensor, so we never apply
         // causal masking to a bidirectional encoder (which would corrupt its output).
         let explicitly_noncausal = flash_params.is_some_and(|p| !p.causal);
+
+        // Latent Sparse Attention (LSA) dispatch when configured via `LsaConfig::install` /
+        // `LoaderBuilder::with_lsa` / TOML `[lsa]` and the KV sequence exceeds both `min_seq_len`
+        // and the local window + sink + top_k budget. Shorter contexts automatically fall back to
+        // standard dense/flash attention where fixed clustering overhead would outweigh savings.
+        if !explicitly_noncausal && sdpa_params.sliding_window.is_none() {
+            if let Some(lsa_cfg) = LsaConfig::global() {
+                let kv_len = k.dim(2)?;
+                let min_trigger = lsa_cfg
+                    .min_seq_len
+                    .max(lsa_cfg.window_size + lsa_cfg.sink_size + lsa_cfg.top_k);
+                if kv_len > min_trigger {
+                    return lsa_sdpa(q, k, v, sdpa_params, &lsa_cfg, None);
+                }
+            }
+        }
 
         // ROCm WMMA flash-attention: causal prefill at long sequences wins 1.23-1.49x over
         // rocBLAS+softmax on gfx1151. A non-SWA causal mask (Custom from the causal masker) or

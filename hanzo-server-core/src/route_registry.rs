@@ -44,6 +44,8 @@ pub const TUNE_MODEL_ROUTE: RouteInfo = RouteInfo::new("/v1/models/tune", "POST"
 pub const SYSTEM_INFO_ROUTE: RouteInfo = RouteInfo::new("/v1/system/info", "GET", RouteKind::Hanzo);
 pub const SYSTEM_DOCTOR_ROUTE: RouteInfo =
     RouteInfo::new("/v1/system/doctor", "POST", RouteKind::Hanzo);
+pub const LSA_CONFIG_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/lsa", "GET, POST, DELETE", RouteKind::Hanzo);
 pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::Hanzo);
 /// Prometheus text: the request totals and the engine's load.
 pub const METRICS_ROUTE: RouteInfo = RouteInfo::new("/metrics", "GET", RouteKind::Hanzo);
@@ -138,6 +140,7 @@ pub const API_ROUTES: &[RouteInfo] = &[
     TUNE_MODEL_ROUTE,
     SYSTEM_INFO_ROUTE,
     SYSTEM_DOCTOR_ROUTE,
+    LSA_CONFIG_ROUTE,
     CHAT_COMPLETIONS_ROUTE,
     RESPONSES_ROUTE,
     RESPONSE_ROUTE,

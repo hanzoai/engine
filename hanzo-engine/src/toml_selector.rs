@@ -517,6 +517,10 @@ pub struct TomlSelector {
 
     /// AnyMoE config
     anymoe: Option<AnyMoeTomlModelSelected>,
+
+    /// Latent Sparse Attention (D-LSA / N-LSA) config (`[lsa]` section in TOML)
+    #[serde(default)]
+    lsa: Option<crate::attention::LsaConfig>,
 }
 
 #[derive(Clone)]
@@ -1010,6 +1014,9 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             anyhow::bail!(
                 "legacy target/draft speculative decoding in TOML configs was removed; use MTP through --mtp-model or the MTP API instead"
             );
+        }
+        if let Some(lsa) = selector.lsa {
+            lsa.install();
         }
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(AnyMoeTomlModelSelected {

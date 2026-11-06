@@ -26,6 +26,7 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
+    lsa: Option<crate::attention::LsaConfig>,
 }
 
 impl LoaderBuilder {
@@ -35,6 +36,7 @@ impl LoaderBuilder {
             no_kv_cache: false,
             chat_template: None,
             jinja_explicit: None,
+            lsa: None,
         }
     }
 
@@ -48,6 +50,11 @@ impl LoaderBuilder {
     }
     pub fn with_jinja_explicit(mut self, jinja_explicit: Option<String>) -> Self {
         self.jinja_explicit = jinja_explicit;
+        self
+    }
+    /// Configure Latent Sparse Attention (D-LSA / N-LSA) programmatically via Rust IaC.
+    pub fn with_lsa(mut self, lsa: crate::attention::LsaConfig) -> Self {
+        self.lsa = Some(lsa);
         self
     }
 
@@ -223,6 +230,9 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
 }
 
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
+    if let Some(lsa) = args.lsa {
+        lsa.install();
+    }
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
