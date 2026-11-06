@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use hanzo_ml::{DType, Device, Error, Result, Tensor, D};
@@ -137,13 +138,14 @@ fn global_lsa_slot() -> &'static RwLock<Option<Arc<LsaConfig>>> {
     })
 }
 
-fn global_session_pool() -> &'static RwLock<HashMap<usize, LsaSessionCache>> {
-    static GLOBAL_POOL: OnceLock<RwLock<HashMap<usize, LsaSessionCache>>> = OnceLock::new();
+fn global_session_pool() -> &'static RwLock<HashMap<usize, Pinned<LsaSessionCache>>> {
+    static GLOBAL_POOL: OnceLock<RwLock<HashMap<usize, Pinned<LsaSessionCache>>>> = OnceLock::new();
     GLOBAL_POOL.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn global_gpu_session_pool() -> &'static RwLock<HashMap<usize, LsaGpuSessionCache>> {
-    static GLOBAL_GPU_POOL: OnceLock<RwLock<HashMap<usize, LsaGpuSessionCache>>> = OnceLock::new();
+fn global_gpu_session_pool() -> &'static RwLock<HashMap<usize, Pinned<LsaGpuSessionCache>>> {
+    static GLOBAL_GPU_POOL: OnceLock<RwLock<HashMap<usize, Pinned<LsaGpuSessionCache>>>> =
+        OnceLock::new();
     GLOBAL_GPU_POOL.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -183,18 +185,103 @@ fn get_cached_causal_mask(
     Ok(mask)
 }
 
-fn clear_global_session_pool() {
+/// Bumped by `install` and `clear`: every session older than this is stale.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// The generation the pools were last emptied for.
+static SETTLED: AtomicU64 = AtomicU64::new(0);
+
+/// `install` and `clear` only mark the sessions stale; this empties the pools, and it runs
+/// on the thread that runs attention.
+///
+/// Session tensors live on the device. A CUDA buffer freed on a thread with no context
+/// bound — the HTTP handler serving `POST`/`DELETE /v1/lsa` — fails inside its `Drop`,
+/// cudarc records that error on the context, and the NEXT allocation returns it: the first
+/// request after every `/v1/lsa` change answered 500 "Failed to allocate preallocated KV
+/// cache". Emptying the pools here frees them where the context is bound.
+pub(crate) fn settle() {
+    let generation = GENERATION.load(Ordering::Acquire);
+    if SETTLED.load(Ordering::Acquire) == generation {
+        return;
+    }
     if let Ok(mut guard) = global_session_pool().write() {
         guard.clear();
     }
     if let Ok(mut guard) = global_gpu_session_pool().write() {
         guard.clear();
     }
+    SETTLED.store(generation, Ordering::Release);
+}
+
+fn clear_global_session_pool() {
+    GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
 fn tensor_storage_key(t: &Tensor) -> usize {
     let (storage, _) = t.storage_and_layout();
     &*storage as *const _ as usize
+}
+
+/// A session and the K tensor it was built from.
+///
+/// Sessions are keyed by the address of K's storage, and an address names a buffer only
+/// while that buffer is alive. A KV cache that grows frees its old buffer, and the
+/// allocator hands the address to the next buffer it makes: another layer's, or the next
+/// request's. A session keyed by a freed buffer then served that buffer's owner with
+/// another layer's keys and values, so identical temperature-0 requests decoded garbage
+/// once the cache grew. Holding `_source` keeps the buffer, and so its address, alive for
+/// exactly as long as the session that is keyed by it.
+struct Pinned<S> {
+    session: S,
+    _source: Tensor,
+    used: u64,
+}
+
+/// Calls after which an untouched session is dropped. A live layer is touched every step,
+/// so this drops sessions whose buffer the cache has replaced or whose sequence is gone;
+/// dropping a live one costs a rebuild from K, never a wrong answer.
+const SESSION_IDLE_CALLS: u64 = 256;
+
+static SESSION_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// The session for the storage `k` lives in.
+///
+/// A decode step (`t_q == 1`) keeps one, made by `new` when there is none, because its
+/// layer names the same cache buffer step after step. A prompt only updates one that is
+/// already there: a prompt's K is often a one-shot tensor (a gather from the paged cache)
+/// that no later call names again, and pinning it would hold that copy for nothing.
+fn session_for<'p, S>(
+    pool: &'p mut HashMap<usize, Pinned<S>>,
+    k: &Tensor,
+    t_q: usize,
+    new: impl FnOnce() -> S,
+) -> Option<&'p mut S> {
+    let now = SESSION_CALLS.fetch_add(1, Ordering::Relaxed);
+    pool.retain(|_, p| now.saturating_sub(p.used) <= SESSION_IDLE_CALLS);
+    let key = tensor_storage_key(k);
+    let pinned = if t_q == 1 {
+        pool.entry(key).or_insert_with(|| Pinned {
+            session: new(),
+            _source: k.clone(),
+            used: now,
+        })
+    } else {
+        pool.get_mut(&key)?
+    };
+    pinned._source = k.clone();
+    pinned.used = now;
+    Some(&mut pinned.session)
+}
+
+/// `x` with each `[T, D]` matrix in row-major order, which the matmuls need. K and V
+/// gathered from the paged cache arrive as a transposed view (`[B, T, H, D]` storage read
+/// as `[B, H, T, D]`); a cache view narrowed along T already qualifies and is not copied.
+fn rows(x: &Tensor) -> Result<Tensor> {
+    let stride = x.stride();
+    if stride[3] == 1 && stride[2] == x.dim(3)? {
+        Ok(x.clone())
+    } else {
+        x.contiguous()
+    }
 }
 
 impl LsaConfig {
@@ -311,7 +398,15 @@ impl LsaConfig {
     pub fn global() -> Option<Arc<Self>> {
         global_lsa_slot().read().ok()?.clone()
     }
+
+    /// How many attention calls LSA has served since the process started: the
+    /// evidence that a long context took the sparse path rather than dense SDPA.
+    pub fn dispatches() -> u64 {
+        DISPATCHES.load(Ordering::Relaxed)
+    }
 }
+
+static DISPATCHES: AtomicU64 = AtomicU64::new(0);
 
 /// Linear projections `W_Q^{(idx)}` and `W_K^{(idx)}` from `[input_dim]` to `[index_dim]`.
 #[derive(Debug, Clone)]
@@ -1695,6 +1790,7 @@ impl LsaGpuSessionCache {
         v: &Tensor,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
+        let (k, v) = (&rows(k)?, &rows(v)?);
         let (_b_sz, h_q, t_q, d_h) = q.dims4()?;
         let (_, h_kv, t_k, _) = k.dims4()?;
         let d_v = v.dim(3)?;
@@ -1984,6 +2080,8 @@ pub fn lsa_sdpa(
     lsa_cfg: &LsaConfig,
     projection: Option<&LearnedProjection>,
 ) -> Result<Tensor> {
+    DISPATCHES.fetch_add(1, Ordering::Relaxed);
+    settle();
     let t_q = q.dim(2)?;
     let t_k = k.dim(2)?;
 
@@ -1994,16 +2092,23 @@ pub fn lsa_sdpa(
         && lsa_cfg.pca_index_dim.is_none()
         && sdpa_params.sinks.is_none()
     {
-        let storage_key = tensor_storage_key(k);
         if let Ok(mut pool) = global_gpu_session_pool().write() {
-            if pool.len() > 256 && !pool.contains_key(&storage_key) {
-                pool.clear();
-            }
-            let session = pool
-                .entry(storage_key)
-                .or_insert_with(|| LsaGpuSessionCache::new(lsa_cfg.clone()));
+            let mut scratch;
+            let session = match session_for(&mut pool, k, t_q, || {
+                LsaGpuSessionCache::new(lsa_cfg.clone())
+            }) {
+                Some(session) => session,
+                None => {
+                    scratch = LsaGpuSessionCache::new(lsa_cfg.clone());
+                    &mut scratch
+                }
+            };
+            // This call writes positions `t_k - t_q..t_k`; a block that reaches into them
+            // was clustered from keys that are not there any more (a fresh prompt, a reused
+            // prefix with a new suffix), so only blocks wholly before them survive.
             let w = lsa_cfg.window_size.max(16);
-            if session.config != *lsa_cfg || t_k < session.clustered_blocks * w || t_q == t_k {
+            if session.config != *lsa_cfg || t_k.saturating_sub(t_q) / w < session.clustered_blocks
+            {
                 session.config = lsa_cfg.clone();
                 session.reset();
             }
@@ -2014,15 +2119,20 @@ pub fn lsa_sdpa(
     // Route standard GQA-regroup LSA calls through the stateful incremental session pool
     // keyed by K storage identity so decode steps (`t_q == 1`) reuse closed-block buckets & hierarchy!
     if projection.is_none() && lsa_cfg.pca_index_dim.is_none() {
-        let storage_key = tensor_storage_key(k);
         if let Ok(mut pool) = global_session_pool().write() {
-            if pool.len() > 256 && !pool.contains_key(&storage_key) {
-                pool.clear();
-            }
-            let session = pool
-                .entry(storage_key)
-                .or_insert_with(|| LsaSessionCache::new(lsa_cfg.clone(), None));
-            if session.config != *lsa_cfg || t_k < session.total_len() || t_q == t_k {
+            let mut scratch;
+            let session = match session_for(&mut pool, k, t_q, || {
+                LsaSessionCache::new(lsa_cfg.clone(), None)
+            }) {
+                Some(session) => session,
+                None => {
+                    scratch = LsaSessionCache::new(lsa_cfg.clone(), None);
+                    &mut scratch
+                }
+            };
+            // The incremental session cannot drop a suffix, so any call that rewrites a
+            // position it already holds starts it over.
+            if session.config != *lsa_cfg || t_k.saturating_sub(t_q) < session.total_len() {
                 session.config = lsa_cfg.clone();
                 session.reset();
             }
@@ -2551,6 +2661,91 @@ mod tests {
         }
         assert_eq!(session.clustered_blocks(), t / 32);
 
+        Ok(())
+    }
+
+    /// A request that takes over a KV buffer rewrites positions a decode session already
+    /// clustered. The prompt over those positions must start the session over, so the next
+    /// decode step reads the new keys: the same calls over a buffer that always held them
+    /// give the same answer.
+    #[test]
+    fn test_lsa_session_restarts_when_a_prompt_rewrites_its_buffer() -> Result<()> {
+        let device = Device::Cpu;
+        let (h_q, h_kv, cap, d_h) = (8, 2, 192, 32);
+        let cfg = LsaConfig {
+            window_size: 32,
+            sink_size: 4,
+            top_k: 16,
+            top_p: 4,
+            pool_size: 2,
+            bucket_size: 4,
+            bucket_cap: 8,
+            min_seq_len: 0,
+            ..Default::default()
+        };
+        let sdpa_params = SdpaParams {
+            n_kv_groups: h_q / h_kv,
+            softcap: None,
+            softmax_scale: 1.0 / (d_h as f32).sqrt(),
+            sliding_window: None,
+            sinks: None,
+        };
+        let q = det_tensor((1, h_q, cap, d_h), 7, &device)?;
+        let (k_old, v_old) = (
+            det_tensor((1, h_kv, cap, d_h), 8, &device)?,
+            det_tensor((1, h_kv, cap, d_h), 9, &device)?,
+        );
+        let (k_new, v_new) = (
+            det_tensor((1, h_kv, cap, d_h), 10, &device)?,
+            det_tensor((1, h_kv, cap, d_h), 11, &device)?,
+        );
+        // Calls: a decode step at 160, a prompt over 64..161, a decode step at 161.
+        let run = |k: &Tensor, v: &Tensor, rewrite: Option<(&Tensor, &Tensor)>| -> Result<Tensor> {
+            lsa_sdpa(
+                &q.narrow(2, 160, 1)?,
+                &k.narrow(2, 0, 161)?,
+                &v.narrow(2, 0, 161)?,
+                &sdpa_params,
+                &cfg,
+                None,
+            )?;
+            if let Some((k_src, v_src)) = rewrite {
+                k.slice_set(&k_src.narrow(2, 64, 97)?.contiguous()?, 2, 64)?;
+                v.slice_set(&v_src.narrow(2, 64, 97)?.contiguous()?, 2, 64)?;
+            }
+            lsa_sdpa(
+                &q.narrow(2, 64, 97)?,
+                &k.narrow(2, 0, 161)?,
+                &v.narrow(2, 0, 161)?,
+                &sdpa_params,
+                &cfg,
+                None,
+            )?;
+            lsa_sdpa(
+                &q.narrow(2, 161, 1)?,
+                &k.narrow(2, 0, 162)?,
+                &v.narrow(2, 0, 162)?,
+                &sdpa_params,
+                &cfg,
+                None,
+            )
+        };
+
+        // A buffer that held the old keys, then had 64.. rewritten to the new ones.
+        let (k_buf, v_buf) = (k_old.copy()?, v_old.copy()?);
+        let taken_over = run(&k_buf, &v_buf, Some((&k_new, &v_new)))?;
+        // A buffer that always held exactly what that one holds now.
+        let (k_ref, v_ref) = (k_buf.copy()?, v_buf.copy()?);
+        let always = run(&k_ref, &v_ref, None)?;
+
+        let diff = (taken_over - always)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff < 1e-5,
+            "decode after a rewrite read stale keys: max diff {diff}"
+        );
         Ok(())
     }
 

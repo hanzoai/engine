@@ -495,7 +495,18 @@ impl Sdpa {
         // `LoaderBuilder::with_lsa` / TOML `[lsa]` and the KV sequence exceeds both `min_seq_len`
         // and the local window + sink + top_k budget. Shorter contexts automatically fall back to
         // standard dense/flash attention where fixed clustering overhead would outweigh savings.
-        if !explicitly_noncausal && sdpa_params.sliding_window.is_none() {
+        backends::lsa::settle();
+        // LSA attends one sequence. A varlen call (a batched prompt over the paged cache)
+        // packs several sequences into one K and marks their boundaries only in
+        // `cumulative_seqlens_q`; a padded batch (B > 1) marks them in the mask, which LSA
+        // does not read. Both go dense rather than attend across requests.
+        let one_sequence = q.dim(0)? == 1
+            && flash_params.is_none_or(|p| {
+                p.cumulative_seqlens_q
+                    .values()
+                    .all(|t| t.dim(0).is_ok_and(|n| n <= 2))
+            });
+        if one_sequence && !explicitly_noncausal && sdpa_params.sliding_window.is_none() {
             if let Some(lsa_cfg) = LsaConfig::global() {
                 let kv_len = k.dim(2)?;
                 let min_trigger = lsa_cfg
