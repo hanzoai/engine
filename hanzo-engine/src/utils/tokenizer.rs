@@ -206,6 +206,8 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
         let raw_fixed = serde_json::to_vec_pretty(&tokenizer).unwrap();
         Tokenizer::from_bytes(&raw_fixed).map_err(anyhow::Error::msg)?
     };
+    tokenizer.with_padding(None);
+    let _ = tokenizer.with_truncation(None);
     if let Some(added_tokens) = processor_added_tokens {
         tokenizer.add_special_tokens(
             &added_tokens
