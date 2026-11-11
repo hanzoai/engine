@@ -243,17 +243,17 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                         }
 
                         if content_parts.is_empty() {
-                            None
-                        } else if !has_non_text_content && content_parts.len() == 1 {
-                            // Optimization: if only one text part, use simple text format
-                            // Extract text from the first part
-                            let first = &content_parts[0];
-                            if let Some(text_value) = first.get("text") {
-                                if let Either::Left(text) = &**text_value {
-                                    Some(MessageContent::from_text(text.clone()))
-                                } else {
-                                    Some(MessageContent::from_parts(content_parts))
-                                }
+                            Some(MessageContent::from_text(String::new()))
+                        } else if !has_non_text_content {
+                            let texts: Vec<&str> = content_parts
+                                .iter()
+                                .filter_map(|part| match part.get("text").map(|v| &**v) {
+                                    Some(Either::Left(s)) => Some(s.as_str()),
+                                    _ => None,
+                                })
+                                .collect();
+                            if texts.len() == content_parts.len() {
+                                Some(MessageContent::from_text(texts.join("\n")))
                             } else {
                                 Some(MessageContent::from_parts(content_parts))
                             }
@@ -272,9 +272,10 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     reasoning_content: None,
                 });
             }
-            TaggedInputItem::ItemReference { id: _ } => {
-                // Item references should be resolved before this point
-                // Skip for now - they'll be handled in parse_responses_request
+            TaggedInputItem::ItemReference { id: _ }
+            | TaggedInputItem::Reasoning { .. }
+            | TaggedInputItem::Ignored => {
+                // Non-message metadata/reference items are omitted from chat history.
             }
             TaggedInputItem::FunctionCall {
                 call_id,
@@ -295,14 +296,41 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     reasoning_content: None,
                 });
             }
-            TaggedInputItem::FunctionCallOutput { call_id, output } => {
+            TaggedInputItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+            } => {
+                let arguments = if serde_json::from_str::<Value>(&input)
+                    .map(|v| v.is_object())
+                    .unwrap_or(false)
+                {
+                    input
+                } else {
+                    serde_json::json!({ "input": input }).to_string()
+                };
+                messages.push(Message {
+                    content: None,
+                    role: "assistant".to_string(),
+                    name: None,
+                    tool_calls: Some(vec![ToolCall {
+                        id: Some(call_id),
+                        tp: hanzo_engine::ToolType::Function,
+                        function: crate::openai::FunctionCalled { name, arguments },
+                    }]),
+                    tool_call_id: None,
+                    reasoning_content: None,
+                });
+            }
+            TaggedInputItem::FunctionCallOutput { call_id, output }
+            | TaggedInputItem::CustomToolCallOutput { call_id, output } => {
                 // Convert to tool message
                 messages.push(Message {
-                    content: Some(MessageContent::from_text(output)),
+                    content: Some(MessageContent::from_text(output.to_text())),
                     role: "tool".to_string(),
                     name: None,
                     tool_calls: None,
-                    tool_call_id: Some(call_id),
+                    tool_call_id: call_id,
                     reasoning_content: None,
                 });
             }
@@ -2014,4 +2042,136 @@ fn handle_error(
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> OpenResponsesResponder {
     handle_completion_error(state, e)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn deserializes_multiturn_codex_openresponses_input() {
+        let payload = json!({
+            "model": "zen6-nano",
+            "instructions": "You are Hanzo.",
+            "stream": true,
+            "parallel_tool_calls": false,
+            "tool_choice": "auto",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "description": "Run a shell command",
+                    "parameters": { "type": "object", "properties": { "cmd": { "type": "string" } } }
+                },
+                {
+                    "type": "custom",
+                    "name": "apply_patch",
+                    "description": "Apply patch"
+                }
+            ],
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{ "type": "input_text", "text": "<permissions instructions>" }]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "hi" }]
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{ "type": "summary_text", "text": "Brief greeting." }]
+                },
+                {
+                    "type": "message",
+                    "status": "completed",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "content": [
+                        { "type": "output_text", "text": "Hello! How can I help you today?" }
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"pwd\"}",
+                    "status": "completed"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        { "type": "input_text", "text": "/workspace" }
+                    ]
+                },
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_2",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch\n*** End Patch"
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_2",
+                    "output": "Applied."
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed"
+                },
+                {
+                    "role": "user",
+                    "content": "4+4"
+                }
+            ]
+        });
+
+        let req: OpenResponsesCreateRequest =
+            serde_json::from_value(payload).expect("multi-turn Codex request must deserialize");
+        let Either::Left(messages) = req.input.into_either() else {
+            panic!("expected item list");
+        };
+
+        assert_eq!(messages.len(), 8);
+        assert_eq!(messages[0].role, "developer");
+        assert_eq!(messages[1].role, "user");
+        assert_eq!(messages[2].role, "assistant");
+        assert_eq!(
+            serde_json::to_value(&messages[2].content).unwrap(),
+            json!("Hello! How can I help you today?")
+        );
+        assert_eq!(messages[3].role, "assistant");
+        assert!(messages[3].tool_calls.is_some());
+        assert_eq!(messages[4].role, "tool");
+        assert_eq!(
+            serde_json::to_value(&messages[4].content).unwrap(),
+            json!("/workspace")
+        );
+        assert_eq!(messages[5].role, "assistant");
+        assert_eq!(messages[6].role, "tool");
+        assert_eq!(messages[7].role, "user");
+        assert_eq!(
+            serde_json::to_value(&messages[7].content).unwrap(),
+            json!("4+4")
+        );
+    }
+
+    #[test]
+    fn malformed_known_item_type_still_fails_deserialization() {
+        let bad = json!({
+            "model": "zen6-nano",
+            "input": [
+                { "type": "message", "role": 123 }
+            ]
+        });
+        assert!(serde_json::from_value::<OpenResponsesCreateRequest>(bad).is_err());
+    }
 }

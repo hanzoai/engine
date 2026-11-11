@@ -89,6 +89,78 @@ pub struct MessageItemParam {
     pub name: Option<String>,
 }
 
+/// Tool output content that can be a plain string, content parts array, or JSON value
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolOutputParam {
+    /// Plain string output
+    Text(String),
+    /// Array of content parts (e.g. structured `input_text` / `input_image` items)
+    Parts(Vec<InputContent>),
+    /// Arbitrary JSON value fallback
+    Json(serde_json::Value),
+}
+
+impl ToolOutputParam {
+    /// Convert tool output into plain text for chat message history
+    pub fn to_text(&self) -> String {
+        use super::content::NormalizedInputContent;
+
+        match self {
+            ToolOutputParam::Text(s) => s.clone(),
+            ToolOutputParam::Parts(parts) => parts
+                .iter()
+                .filter_map(|part| match part.clone().into_normalized() {
+                    NormalizedInputContent::Text { text } => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ToolOutputParam::Json(v) => {
+                if v.is_null() {
+                    String::new()
+                } else {
+                    v.to_string()
+                }
+            }
+        }
+    }
+}
+
+fn deserialize_unknown_item_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if matches!(
+        s.as_str(),
+        "message"
+            | "item_reference"
+            | "function_call"
+            | "function_call_output"
+            | "custom_tool_call"
+            | "custom_tool_call_output"
+            | "reasoning"
+    ) {
+        return Err(serde::de::Error::custom(format!(
+            "invalid payload for known input item type '{s}'"
+        )));
+    }
+    Ok(s)
+}
+
+/// Forward-compatible wrapper for typed OpenResponses history items (e.g. `web_search_call`,
+/// `local_shell_call`, `compaction`) that carry an explicit `"type"` tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnknownTypedItem {
+    /// Item type discriminator
+    #[serde(rename = "type", deserialize_with = "deserialize_unknown_item_type")]
+    pub item_type: String,
+    /// Remaining fields on the item
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
 /// Tagged input item types (with explicit "type" field)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -116,24 +188,60 @@ pub enum TaggedInputItem {
     #[serde(rename = "function_call_output")]
     FunctionCallOutput {
         /// ID of the function call this is a response to
-        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
         /// Output from the function
-        output: String,
+        output: ToolOutputParam,
     },
+    /// A freeform custom tool call made by the assistant (e.g. `apply_patch`)
+    #[serde(rename = "custom_tool_call")]
+    CustomToolCall {
+        /// Unique identifier for this custom tool call
+        call_id: String,
+        /// Name of the custom tool
+        name: String,
+        /// Raw input passed to the custom tool
+        input: String,
+    },
+    /// Output from a freeform custom tool call
+    #[serde(rename = "custom_tool_call_output")]
+    CustomToolCallOutput {
+        /// ID of the custom tool call this is a response to
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        /// Output from the custom tool
+        output: ToolOutputParam,
+    },
+    /// Reasoning item echoed back in multi-turn input history
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        /// Reasoning summary items
+        #[serde(default)]
+        summary: Vec<serde_json::Value>,
+        /// Raw reasoning content items
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<serde_json::Value>>,
+    },
+    /// Unrecognized typed item preserved during deserialization and ignored in chat conversion
+    #[serde(skip)]
+    Ignored,
 }
 
 /// Input item types for the OpenResponses API.
 ///
-/// This enum supports both:
-/// - Explicitly typed items with `"type": "message"`, `"type": "item_reference"`, etc.
+/// This enum supports:
+/// - Explicitly typed items with `"type": "message"`, `"type": "function_call"`, etc.
 /// - Bare messages with just `role` and `content` (no type field) for compatibility with OpenAI's format
+/// - Forward-compatible typed history items (`web_search_call`, `compaction`, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum InputItem {
-    /// Explicitly typed input item (has "type" field)
+    /// Explicitly typed input item (has known "type" field)
     Tagged(TaggedInputItem),
     /// A bare message (just role + content, no type field) - OpenAI compatibility
     Message(MessageItemParam),
+    /// Any other typed OpenResponses item
+    Other(UnknownTypedItem),
 }
 
 impl InputItem {
@@ -142,6 +250,7 @@ impl InputItem {
         match self {
             InputItem::Tagged(t) => t,
             InputItem::Message(m) => TaggedInputItem::Message(m),
+            InputItem::Other(_) => TaggedInputItem::Ignored,
         }
     }
 }

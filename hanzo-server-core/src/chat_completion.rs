@@ -504,6 +504,32 @@ fn insert_reasoning_content(
     }
 }
 
+// shortcut: zen6-nano 2B 2-bit QAT MLX weights were identity-trained without MCP tool
+// qualification and collapse to a memorized refusal string whenever `<tools>` is rendered;
+// remove once tool-qualified zen6-nano weights ship (override with HANZO_NANO_ENABLE_TOOLS=1).
+fn should_suppress_nano_tools(
+    requested_model: &str,
+    served_name: Option<&str>,
+    loaded_models: &[String],
+    tool_choice: Option<&ToolChoice>,
+    env_enable: Option<&str>,
+) -> bool {
+    if matches!(env_enable, Some("1" | "true" | "TRUE")) {
+        return false;
+    }
+    if matches!(tool_choice, Some(ToolChoice::Tool(_))) {
+        return false;
+    }
+    let is_nano = |name: &str| {
+        let lower = name.trim().to_ascii_lowercase();
+        lower == "zen6-nano" || lower.ends_with("/zen6-nano") || lower.ends_with(":zen6-nano")
+    };
+    if is_nano(requested_model) || served_name.is_some_and(is_nano) {
+        return true;
+    }
+    requested_model == "default" && loaded_models.len() == 1 && is_nano(&loaded_models[0])
+}
+
 ///
 /// The request controls are checked in this order: the token budget, the
 /// template controls and their aliases, the sampling values, `tool_choice`, the effort, the
@@ -555,12 +581,24 @@ pub async fn parse_request(
         frequency_penalty: oairequest.frequency_penalty,
     }
     .resolve(defaults)?;
-    let tool_choice = controls::tool_choice(
+    let mut tool_choice = controls::tool_choice(
         oairequest.tool_choice.as_ref(),
         oairequest.tools.as_deref().unwrap_or_default(),
     )?;
-    // `tool_choice: none` renders no tools and parses no calls.
-    let tools = if matches!(tool_choice, Some(ToolChoice::None)) {
+    let loaded_models = state.list_models().unwrap_or_default();
+    let nano_tools_env = std::env::var("HANZO_NANO_ENABLE_TOOLS").ok();
+    let suppress_nano_tools = should_suppress_nano_tools(
+        &oairequest.model,
+        defaults.served_name.as_deref(),
+        &loaded_models,
+        tool_choice.as_ref(),
+        nano_tools_env.as_deref(),
+    );
+    // `tool_choice: none` (or unqualified zen6-nano auto tool schemas) renders no tools and parses no calls.
+    let tools = if matches!(tool_choice, Some(ToolChoice::None)) || suppress_nano_tools {
+        if suppress_nano_tools {
+            tool_choice = None;
+        }
         None
     } else {
         oairequest.tools
@@ -1255,5 +1293,42 @@ pub fn match_responses(state: SharedState, response: Response) -> ChatCompletion
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod nano_tools_tests {
+    use super::*;
+
+    #[test]
+    fn suppresses_auto_tools_only_for_zen6_nano() {
+        assert!(should_suppress_nano_tools(
+            "zen6-nano",
+            None,
+            &[],
+            Some(&ToolChoice::Auto),
+            None,
+        ));
+        assert!(should_suppress_nano_tools(
+            "default",
+            None,
+            &["/Users/user/.hanzo/models/zen6-nano".to_string()],
+            None,
+            None,
+        ));
+        assert!(!should_suppress_nano_tools(
+            "zen6-flash",
+            None,
+            &["zen6-flash".to_string()],
+            Some(&ToolChoice::Auto),
+            None,
+        ));
+        assert!(!should_suppress_nano_tools(
+            "zen6-nano",
+            None,
+            &[],
+            Some(&ToolChoice::Auto),
+            Some("1"),
+        ));
     }
 }

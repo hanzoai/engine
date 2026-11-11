@@ -28,10 +28,23 @@ pub enum OpenResponsesInputContent {
         /// The text content
         text: String,
     },
+    /// Assistant text content echoed back in multi-turn input history
+    #[serde(rename = "output_text")]
+    OutputText {
+        /// The text content
+        text: String,
+    },
+    /// Assistant refusal content echoed back in multi-turn input history
+    #[serde(rename = "refusal")]
+    Refusal {
+        /// The refusal message
+        refusal: String,
+    },
     /// Image input content
     #[serde(rename = "input_image")]
     InputImage {
         /// The image URL
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         image_url: Option<String>,
         /// Base64 encoded image data
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,8 +127,12 @@ impl InputContent {
     pub fn into_normalized(self) -> NormalizedInputContent {
         match self {
             InputContent::OpenResponses(c) => match c {
-                OpenResponsesInputContent::InputText { text } => {
+                OpenResponsesInputContent::InputText { text }
+                | OpenResponsesInputContent::OutputText { text } => {
                     NormalizedInputContent::Text { text }
+                }
+                OpenResponsesInputContent::Refusal { refusal } => {
+                    NormalizedInputContent::Text { text: refusal }
                 }
                 OpenResponsesInputContent::InputImage {
                     image_url,
