@@ -338,11 +338,23 @@ pub(crate) fn list_repo_files(
         return Ok(files);
     }
 
+    let cached_snapshot = offline_snapshot_files(model_id, revision);
+    let snapshot_has_weights = cached_snapshot.iter().any(|f| {
+        f.ends_with(".safetensors")
+            || f.ends_with(".gguf")
+            || f.ends_with(".ggml")
+            || f.ends_with(".uqff")
+            || f.ends_with(".bin")
+    });
+    if snapshot_has_weights {
+        write_cached_repo_files(&cache_file, &cached_snapshot);
+        return Ok(cached_snapshot);
+    }
+
     if is_hf_hub_offline() {
-        let files = offline_snapshot_files(model_id, revision);
-        if !files.is_empty() {
-            write_cached_repo_files(&cache_file, &files);
-            return Ok(files);
+        if !cached_snapshot.is_empty() {
+            write_cached_repo_files(&cache_file, &cached_snapshot);
+            return Ok(cached_snapshot);
         }
         if should_error {
             return Err(anyhow!(
@@ -368,6 +380,10 @@ pub(crate) fn list_repo_files(
             Ok(files)
         }
         Err(err) => {
+            if !cached_snapshot.is_empty() && !should_propagate_api_error(&err) {
+                write_cached_repo_files(&cache_file, &cached_snapshot);
+                return Ok(cached_snapshot);
+            }
             if should_error || should_propagate_api_error(&err) {
                 Err(hf_api_error(model_id, None, &err))
             } else {
@@ -396,14 +412,15 @@ pub(crate) fn get_file(
         return Ok(path);
     }
 
+    if let Some(path) = offline_cache_repo(model_id, revision).get(file) {
+        trace!(
+            "Loading `{file}` from local Hugging Face cache at `{}`",
+            path.display()
+        );
+        return Ok(path);
+    }
+
     if is_hf_hub_offline() {
-        if let Some(path) = offline_cache_repo(model_id, revision).get(file) {
-            trace!(
-                "Loading `{file}` from local Hugging Face cache at `{}` (offline mode)",
-                path.display()
-            );
-            return Ok(path);
-        }
         return Err(offline_missing_file_error(model_id, file, revision));
     }
 
@@ -411,7 +428,7 @@ pub(crate) fn get_file(
         .map_err(|err| hf_api_error(model_id, Some(file), &err))
 }
 
-/// Like [`get_file`] but returns `Ok(None)` (instead of an error) when the file is genuinely missing, and used with `HF_HUB_OFFLINE`.
+/// Like [`get_file`] but returns `Ok(None)` (instead of an error) when the file is genuinely missing.
 pub(crate) fn try_get_file(
     api: &ApiRepo,
     model_id: &Path,
@@ -427,14 +444,25 @@ pub(crate) fn try_get_file(
         return Ok(None);
     }
 
+    if let Some(path) = offline_cache_repo(model_id, revision).get(file) {
+        return Ok(Some(path));
+    }
+
     if is_hf_hub_offline() {
-        return Ok(offline_cache_repo(model_id, revision).get(file));
+        return Ok(None);
+    }
+
+    if let Some(cached_files) = read_cached_repo_files(&cache_file_for_model(model_id)) {
+        if !cached_files.iter().any(|f| f == file) {
+            return Ok(None);
+        }
     }
 
     match api.get(file) {
         Ok(p) => Ok(Some(p)),
         Err(err) => match api_error_status_code(&err) {
             Some(404) => Ok(None),
+            None if !offline_snapshot_files(model_id, revision).is_empty() => Ok(None),
             _ => Err(err),
         },
     }
@@ -449,9 +477,14 @@ pub fn probe_hf_repo_files(
 ) -> Option<Vec<String>> {
     use hf_hub::api::sync::ApiBuilder;
 
-    if is_hf_hub_offline() {
-        let files = offline_snapshot_files(Path::new(model_id), revision);
-        return (!files.is_empty()).then_some(files);
+    let cached = offline_snapshot_files(Path::new(model_id), revision);
+    if is_hf_hub_offline() || !cached.is_empty() {
+        if !cached.is_empty() {
+            return Some(cached);
+        }
+        if is_hf_hub_offline() {
+            return None;
+        }
     }
 
     let token = crate::utils::tokens::get_token(token_source).ok().flatten();
