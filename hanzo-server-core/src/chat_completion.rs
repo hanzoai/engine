@@ -527,7 +527,64 @@ fn should_suppress_nano_tools(
     if is_nano(requested_model) || served_name.is_some_and(is_nano) {
         return true;
     }
-    requested_model == "default" && loaded_models.len() == 1 && is_nano(&loaded_models[0])
+    if requested_model == "default" && loaded_models.len() == 1 && is_nano(&loaded_models[0]) {
+        return true;
+    }
+    false
+}
+
+fn is_codex_harness_user_wrapper(message: &crate::openai::Message) -> bool {
+    if message.role != "user" {
+        return false;
+    }
+    let text: Option<String> = match message.content.as_deref() {
+        Some(Either::Left(s)) => Some(s.clone()),
+        Some(Either::Right(parts)) => {
+            let mut buf = String::new();
+            for part in parts {
+                match part.get("text").map(|c| &c.0) {
+                    Some(Either::Left(s)) => buf.push_str(s),
+                    _ => return false,
+                }
+            }
+            Some(buf)
+        }
+        None => None,
+    };
+    let Some(text) = text else {
+        return false;
+    };
+    let trimmed = text.trim_start();
+    [
+        "<environment_context>",
+        "# AGENTS.md instructions",
+        "<user_instructions>",
+        "<contextual_user_fragment",
+        "<internal_model_context",
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix))
+}
+
+// shortcut: zen6-nano 2-bit QAT MLX weights were SFT-trained without `<|im_start|>system`
+// or Codex XML developer/environment wrappers, which trigger memorized tool-refusal strings
+// and add ~2K-12K prefill tokens per turn; remove once tool-qualified zen6-nano weights ship.
+fn sanitize_nano_messages(messages: Vec<crate::openai::Message>) -> Vec<crate::openai::Message> {
+    let has_real_user = messages
+        .iter()
+        .any(|m| m.role == "user" && !is_codex_harness_user_wrapper(m));
+    messages
+        .into_iter()
+        .filter(|m| {
+            if matches!(m.role.as_str(), "system" | "developer") {
+                return false;
+            }
+            if has_real_user && is_codex_harness_user_wrapper(m) {
+                return false;
+            }
+            true
+        })
+        .collect()
 }
 
 ///
@@ -609,6 +666,11 @@ pub async fn parse_request(
 
     let messages = match oairequest.messages {
         Either::Left(req_messages) => {
+            let req_messages = if suppress_nano_tools {
+                sanitize_nano_messages(req_messages)
+            } else {
+                req_messages
+            };
             let mut messages = Vec::new();
             let mut image_urls = Vec::new();
             let mut audio_urls = Vec::new();
@@ -1330,5 +1392,34 @@ mod nano_tools_tests {
             Some(&ToolChoice::Auto),
             Some("1"),
         ));
+    }
+
+    #[test]
+    fn sanitizes_codex_harness_wrappers_for_zen6_nano() {
+        use crate::openai::{Message, MessageContent};
+
+        let msg = |role: &str, text: &str| Message {
+            content: Some(MessageContent::from_text(text.to_string())),
+            role: role.to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        };
+        let cleaned = sanitize_nano_messages(vec![
+            msg("system", "You are Codex."),
+            msg("developer", "<skills_instructions>\n..."),
+            msg(
+                "user",
+                "<environment_context>\n  <cwd>/Users/a</cwd>\n</environment_context>",
+            ),
+            msg("user", "hi"),
+            msg("assistant", "Hello!"),
+            msg("user", "4+4"),
+        ]);
+        assert_eq!(cleaned.len(), 3);
+        assert_eq!(cleaned[0].role, "user");
+        assert_eq!(cleaned[1].role, "assistant");
+        assert_eq!(cleaned[2].role, "user");
     }
 }
