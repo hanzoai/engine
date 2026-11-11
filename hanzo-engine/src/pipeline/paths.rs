@@ -378,6 +378,18 @@ pub fn get_model_paths(
                 .clone()
                 .filter(|x| x.ends_with(".safetensors"))
                 .collect::<Vec<_>>();
+            // Prefer root-level safetensors (e.g. `model.safetensors`) over subdirectory
+            // conversions such as `mlx/model.safetensors` when a repo ships both.
+            let root_safetensors = safetensors
+                .iter()
+                .filter(|x| !x.contains('/'))
+                .cloned()
+                .collect::<Vec<_>>();
+            let safetensors = if !root_safetensors.is_empty() {
+                root_safetensors
+            } else {
+                safetensors
+            };
             let pickles = listing
                 .clone()
                 .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
