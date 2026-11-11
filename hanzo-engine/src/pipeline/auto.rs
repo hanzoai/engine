@@ -175,6 +175,10 @@ impl AutoLoaderBuilder {
 struct AutoConfig {
     #[serde(default)]
     architectures: Vec<String>,
+    #[serde(default)]
+    model_type: Option<String>,
+    #[serde(default)]
+    base_model_type: Option<String>,
 }
 
 struct ConfigArtifacts {
@@ -391,6 +395,22 @@ impl AutoLoader {
             }
         })?;
         let cfg: AutoConfig = serde_json::from_str(config)?;
+        if cfg.architectures.is_empty() {
+            let mt = cfg
+                .model_type
+                .as_deref()
+                .or(cfg.base_model_type.as_deref())
+                .unwrap_or("");
+            match mt {
+                "prism_hadamard_qwen35" | "qwen3_5" => {
+                    return Ok(Detected::Multimodal(MultimodalLoaderType::Qwen3_5));
+                }
+                "qwen3_5_moe" | "qwen3_5moe" => {
+                    return Ok(Detected::Multimodal(MultimodalLoaderType::Qwen3_5Moe));
+                }
+                _ => {}
+            }
+        }
         if cfg.architectures.len() != 1 {
             anyhow::bail!("Expected exactly one architecture in config");
         }

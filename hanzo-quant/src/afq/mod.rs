@@ -1,11 +1,12 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     io::Cursor,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, Mutex, OnceLock},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use hanzo_ml::{DType, Device, Result, Tensor};
+use hanzo_ml::{DType, Device, DeviceLocation, Result, Tensor, D};
 use hanzo_nn::Linear;
 
 use crate::{
@@ -83,12 +84,66 @@ impl TryFrom<u8> for AfqGroupSize {
     }
 }
 
+static HADAMARD_CACHE: OnceLock<Mutex<HashMap<(DeviceLocation, usize), Tensor>>> = OnceLock::new();
+
+fn hadamard_matrix(block: usize, device: &Device) -> Result<Tensor> {
+    if block == 0 || !block.is_power_of_two() {
+        hanzo_ml::bail!("Hadamard block size must be a power of two, got {block}");
+    }
+    let cache = HADAMARD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (device.location(), block);
+    if let Some(h) = cache.lock().unwrap().get(&key) {
+        return Ok(h.clone());
+    }
+    let scale = 1.0f32 / (block as f32).sqrt();
+    let mut data = vec![0.0f32; block * block];
+    for i in 0..block {
+        for j in 0..block {
+            let parity = (i & j).count_ones() & 1;
+            data[i * block + j] = if parity == 0 { scale } else { -scale };
+        }
+    }
+    let h = Tensor::from_vec(data, (block, block), device)?;
+    cache.lock().unwrap().insert(key, h.clone());
+    Ok(h)
+}
+
+fn fwht_typed(
+    x: &Tensor,
+    block: usize,
+    signs: &Tensor,
+    inverse: bool,
+    out_dtype: DType,
+) -> Result<Tensor> {
+    let orig_shape = x.shape().clone();
+    let last_dim = x.dim(D::Minus1)?;
+    if last_dim % block != 0 {
+        hanzo_ml::bail!("fwht expects last dim ({last_dim}) divisible by block ({block})");
+    }
+    let mut y = x.to_dtype(DType::F32)?;
+    if !inverse {
+        y = y.broadcast_mul(signs)?;
+    }
+    let h = hadamard_matrix(block, x.device())?;
+    let mut out = y.reshape(((), block))?.matmul(&h)?.reshape(orig_shape)?;
+    if inverse {
+        out = out.broadcast_mul(signs)?;
+    }
+    if out.dtype() != out_dtype {
+        out.to_dtype(out_dtype)
+    } else {
+        Ok(out)
+    }
+}
+
 #[derive(Debug)]
 pub struct AfqLayer {
     w_q: Tensor,
     scales: Tensor,
     biases: Tensor,
     bias: Option<Tensor>,
+    signs: Option<Tensor>,
+    hadamard_block: usize,
     bits: AfqBits,
     group_size: AfqGroupSize,
 }
@@ -134,6 +189,8 @@ impl QuantMethod for AfqLayer {
                     scales,
                     biases,
                     bias,
+                    signs: None,
+                    hadamard_block: 0,
                     bits,
                     group_size,
                 })
@@ -142,32 +199,84 @@ impl QuantMethod for AfqLayer {
     }
 
     fn dequantize_w(&self) -> Result<hanzo_ml::Tensor> {
-        ops::afq_dequantize_op(
+        let w = ops::afq_dequantize_op(
             &self.w_q,
             &self.scales,
             &self.biases,
             self.group_size,
             self.bits,
-        )
+        )?;
+        if let Some(ref signs) = self.signs {
+            fwht_typed(&w, self.hadamard_block, signs, true, w.dtype())
+        } else {
+            Ok(w)
+        }
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
-        ops::afq_mm_op(
-            x,
-            &self.w_q,
-            &self.scales,
-            &self.biases,
-            None,
-            None,
-            self.group_size,
-            self.bits,
-            true,
-        )
+        let orig_dtype = x.dtype();
+        let mm_dtype = self.scales.dtype();
+        let x_mm = if let Some(ref signs) = self.signs {
+            fwht_typed(x, self.hadamard_block, signs, false, mm_dtype)?
+        } else if x.dtype() != mm_dtype {
+            x.to_dtype(mm_dtype)?
+        } else {
+            x.clone()
+        };
+
+        let mut out = if self.w_q.rank() == 2 && x_mm.rank() > 2 {
+            let k_in = x_mm.dim(D::Minus1)?;
+            let mut out_dims = x_mm.dims()[..x_mm.rank() - 1].to_vec();
+            let x_2d = x_mm.reshape(((), k_in))?;
+            let out_2d = ops::afq_mm_op(
+                &x_2d,
+                &self.w_q,
+                &self.scales,
+                &self.biases,
+                None,
+                None,
+                self.group_size,
+                self.bits,
+                true,
+            )?;
+            out_dims.push(out_2d.dim(D::Minus1)?);
+            out_2d.reshape(out_dims)?
+        } else {
+            ops::afq_mm_op(
+                &x_mm,
+                &self.w_q,
+                &self.scales,
+                &self.biases,
+                None,
+                None,
+                self.group_size,
+                self.bits,
+                true,
+            )?
+        };
+
+        if let Some(ref b) = self.bias {
+            out = out.broadcast_add(&b.to_dtype(out.dtype())?)?;
+        }
+        if out.dtype() != orig_dtype {
+            out.to_dtype(orig_dtype)
+        } else {
+            Ok(out)
+        }
     }
 
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        ops::afq_mm_op(
-            x,
+        let orig_dtype = x.dtype();
+        let mm_dtype = self.scales.dtype();
+        let x_mm = if let Some(ref signs) = self.signs {
+            fwht_typed(x, self.hadamard_block, signs, false, mm_dtype)?
+        } else if x.dtype() != mm_dtype {
+            x.to_dtype(mm_dtype)?
+        } else {
+            x.clone()
+        };
+        let out = ops::afq_mm_op(
+            &x_mm,
             &self.w_q,
             &self.scales,
             &self.biases,
@@ -176,7 +285,12 @@ impl QuantMethod for AfqLayer {
             self.group_size,
             self.bits,
             true,
-        )
+        )?;
+        if out.dtype() != orig_dtype {
+            out.to_dtype(orig_dtype)
+        } else {
+            Ok(out)
+        }
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -184,6 +298,9 @@ impl QuantMethod for AfqLayer {
     }
 
     fn afq_inner(&self) -> Option<crate::AfqInner<'_>> {
+        if self.signs.is_some() {
+            return None;
+        }
         Some(crate::AfqInner {
             w_q: &self.w_q,
             scales: &self.scales,
@@ -284,8 +401,12 @@ impl AfqLayer {
         if !matches!(config, QuantizedConfig::Afq { .. }) {
             hanzo_ml::bail!("Unexpected quantization config.")
         }
-        let Some((bits, group_size)) = config.afq_at(&vb.prefix()) else {
-            // The recipe leaves this module unquantized.
+        // Unquantized fallback when either the per-module recipe excludes this layer or the
+        // checkpoint left this module unquantized (e.g., GDN `in_proj_a` / `in_proj_b`).
+        let Some((bits, group_size)) = config
+            .afq_at(&vb.prefix())
+            .filter(|_| vb.contains_tensor("scales"))
+        else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
             let bias = if bias {
                 Some(vb.get((out_dim,), "bias")?)
@@ -297,16 +418,53 @@ impl AfqLayer {
             )?));
         };
 
+        Ok(Self::afq_linear_typed(
+            in_dim, out_dim, bits, group_size, bias, vb,
+        )?)
+    }
+
+    pub fn afq_linear_typed(
+        in_dim: usize,
+        out_dim: usize,
+        bits: usize,
+        group_size: usize,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<Self>> {
         let w_q = vb.get_with_hints_dtype(
             (out_dim, in_dim * bits / 32),
             "weight",
             Default::default(),
             DType::U32,
         )?;
-        let scales =
-            vb.get_with_hints((out_dim, in_dim / group_size), "scales", Default::default())?;
-        let biases =
-            vb.get_with_hints((out_dim, in_dim / group_size), "biases", Default::default())?;
+        let signs = if vb.contains_tensor("signs") {
+            Some(vb.get_with_hints_dtype((in_dim,), "signs", Default::default(), DType::F32)?)
+        } else {
+            None
+        };
+        let hadamard_block = if signs.is_some() { 512 } else { 0 };
+        // Preserve 10-bit F16 mantissa precision on Prism/Bonsai-2 Hadamard checkpoints.
+        let (scales, biases) = if signs.is_some() {
+            (
+                vb.get_with_hints_dtype(
+                    (out_dim, in_dim / group_size),
+                    "scales",
+                    Default::default(),
+                    DType::F16,
+                )?,
+                vb.get_with_hints_dtype(
+                    (out_dim, in_dim / group_size),
+                    "biases",
+                    Default::default(),
+                    DType::F16,
+                )?,
+            )
+        } else {
+            (
+                vb.get_with_hints((out_dim, in_dim / group_size), "scales", Default::default())?,
+                vb.get_with_hints((out_dim, in_dim / group_size), "biases", Default::default())?,
+            )
+        };
 
         let bias = if bias {
             Some(vb.get((out_dim,), "bias")?)
@@ -319,9 +477,35 @@ impl AfqLayer {
             scales,
             bias,
             biases,
+            signs,
+            hadamard_block,
             bits: AfqBits::try_from(bits)?,
             group_size: AfqGroupSize::try_from(group_size)?,
         }))
+    }
+
+    /// Token embedding lookup directly from quantized rows (without dequantizing the full vocab).
+    pub fn embed(&self, ids: &Tensor, out_dtype: DType) -> Result<Tensor> {
+        let orig_dims = ids.dims().to_vec();
+        let flat_ids = ids.flatten_all()?;
+        let flat_ids = match flat_ids.dtype() {
+            DType::U32 | DType::I64 => flat_ids,
+            _ => flat_ids.to_dtype(DType::U32)?,
+        };
+        let w_sel = self.w_q.index_select(&flat_ids, 0)?;
+        let s_sel = self.scales.index_select(&flat_ids, 0)?;
+        let b_sel = self.biases.index_select(&flat_ids, 0)?;
+        let deq = ops::afq_dequantize_op(&w_sel, &s_sel, &b_sel, self.group_size, self.bits)?;
+        let emb = if let Some(ref signs) = self.signs {
+            fwht_typed(&deq, self.hadamard_block, signs, true, out_dtype)?
+        } else if deq.dtype() != out_dtype {
+            deq.to_dtype(out_dtype)?
+        } else {
+            deq
+        };
+        let mut out_dims = orig_dims;
+        out_dims.push(emb.dim(D::Minus1)?);
+        emb.reshape(out_dims)
     }
 
     pub fn afq_packed_linear_b(
@@ -364,6 +548,8 @@ impl AfqLayer {
             scales,
             bias,
             biases,
+            signs: None,
+            hadamard_block: 0,
             bits: AfqBits::try_from(bits)?,
             group_size: AfqGroupSize::try_from(group_size)?,
         }))
@@ -455,6 +641,8 @@ impl QuantizedSerde for AfqLayer {
             scales,
             bias: b,
             biases,
+            signs: None,
+            hadamard_block: 0,
             bits,
             group_size,
         }))
@@ -506,6 +694,8 @@ impl QuantizedSerde for AfqLayer {
                 scales,
                 bias: None,
                 biases,
+                signs: None,
+                hadamard_block: 0,
                 bits,
                 group_size,
             }),

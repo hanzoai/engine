@@ -49,12 +49,14 @@ impl Qwen3_5MtpHead {
         device: &Device,
         max_draft: usize,
     ) -> Result<Self> {
-        if !vb.contains_tensor(MTP_FC_WEIGHT) {
+        let is_embedded = vb.contains_tensor(MTP_FC_WEIGHT);
+        let is_standalone = vb.contains_tensor("fc.weight") || vb.contains_tensor("fc.scales");
+        if !is_embedded && !is_standalone {
             hanzo_ml::bail!(
-                "`--mtp` requested but this checkpoint carries no built-in MTP head (`{MTP_FC_WEIGHT}`)."
+                "`--mtp` requested but this checkpoint carries no MTP head (`{MTP_FC_WEIGHT}` or `fc.weight`)."
             );
         }
-        if cfg.mtp_num_hidden_layers != 1 {
+        if is_embedded && cfg.mtp_num_hidden_layers != 1 {
             hanzo_ml::bail!(
                 "Qwen3.5 MTP is one decoder layer; this config declares {}",
                 cfg.mtp_num_hidden_layers
@@ -63,12 +65,16 @@ impl Qwen3_5MtpHead {
         if cfg.mtp_use_dedicated_embeddings {
             hanzo_ml::bail!("Qwen3.5 MTP with dedicated embeddings is not supported");
         }
-        // The checkpoint leaves `mtp.*` unquantized however the main stack is quantized, so the
-        // head loads plain at the checkpoint dtype.
+        // Embedded HF checkpoints leave `mtp.*` unquantized; standalone MLX `mtp/` directories
+        // supply their own `quantization` config and pre-shifted RMSNorm weights.
         let mut cfg = cfg.clone();
-        cfg.quantization_config = None;
+        let (vb, add_unit_offset) = if is_embedded {
+            cfg.quantization_config = None;
+            (mapper.set_nm_device(vb.pp("mtp"), false), true)
+        } else {
+            (mapper.set_nm_device(vb, false), false)
+        };
 
-        let vb = mapper.set_nm_device(vb.pp("mtp"), false);
         // The head sits beside the main stack and shards the way it does.
         let comm = mapper.get_comm_for(0)?;
         let rotary_emb = Arc::new(Qwen3VLRotaryEmbedding::new(
@@ -84,17 +90,20 @@ impl Qwen3_5MtpHead {
             rotary_emb,
             None,
             &comm,
+            add_unit_offset,
         )?;
 
         Ok(Self {
-            pre_fc_norm_embedding: GemmaRmsNorm::new(
+            pre_fc_norm_embedding: GemmaRmsNorm::new_with_offset(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                add_unit_offset,
                 vb.pp("pre_fc_norm_embedding"),
             )?,
-            pre_fc_norm_hidden: GemmaRmsNorm::new(
+            pre_fc_norm_hidden: GemmaRmsNorm::new_with_offset(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                add_unit_offset,
                 vb.pp("pre_fc_norm_hidden"),
             )?,
             fc: ReplicatedLayer::new(
@@ -105,7 +114,12 @@ impl Qwen3_5MtpHead {
                 vb.pp("fc"),
             )?,
             layer,
-            norm: GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?,
+            norm: GemmaRmsNorm::new_with_offset(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                add_unit_offset,
+                vb.pp("norm"),
+            )?,
             cache: chain_cache(max_draft),
             device: device.clone(),
             dtype: vb.dtype(),
@@ -197,16 +211,30 @@ impl SelfSpeculative for Qwen3_5Model {
             Vec::new(),
             true,
             None,
-            |name: String| name.starts_with("mtp."),
+            |_| true,
             Arc::new(|_| DeviceForLoadTensor::Base),
         )?;
+        let mut head_cfg = self.text_config.clone();
+        let mtp_cfg_path = path.join("config.json");
+        if let Ok(raw_cfg) = fs::read_to_string(&mtp_cfg_path) {
+            #[derive(serde::Deserialize)]
+            struct MtpQuantShim {
+                #[serde(default, alias = "quantization")]
+                quantization_config: Option<hanzo_quant::QuantizedConfig>,
+            }
+            if let Ok(shim) = serde_json::from_str::<MtpQuantShim>(&raw_cfg) {
+                if shim.quantization_config.is_some() {
+                    head_cfg.quantization_config = shim.quantization_config;
+                }
+            }
+        }
         let n_predict = cfg
             .n_predict
             .unwrap_or(default_n_predict(self.text_config.hidden_size))
             .max(1);
         let head = Qwen3_5MtpHead::load(
             vb,
-            &self.text_config,
+            &head_cfg,
             self.text.mapper(),
             &self.text.device,
             n_predict,

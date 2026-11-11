@@ -806,7 +806,13 @@ impl GatedDeltaNet {
         };
 
         let conv_dim = key_dim * 2 + value_dim;
-        let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
+        let mut conv1d_weight = match vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight") {
+            Ok(w) => w,
+            Err(_) => vb_la
+                .get((conv_dim, conv_kernel_size, 1), "conv1d.weight")?
+                .transpose(1, 2)?
+                .contiguous()?,
+        };
         let mut dt_bias = vb_la.get(num_v_heads, "dt_bias")?;
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 

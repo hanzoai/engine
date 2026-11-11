@@ -508,6 +508,14 @@ impl Loader for MultimodalLoader {
             layer_devices.push(device);
         }
         let dtype = mapper.get_min_dtype(dtype)?;
+        // Prism/Bonsai-2 2-bit Hadamard checkpoints calibrate F16 scales/biases; keep F16
+        // activations rather than truncating mantissas to BF16 under ModelDType::Auto.
+        let dtype =
+            if config.contains("\"prism_hadamard_qwen35\"") && dtype == hanzo_ml::DType::BF16 {
+                hanzo_ml::DType::F16
+            } else {
+                dtype
+            };
 
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.

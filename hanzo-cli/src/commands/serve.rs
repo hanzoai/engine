@@ -48,6 +48,7 @@ pub async fn run_server(
     // Convert our clean args to ModelSelected for the existing loader infrastructure
     let matformer = runtime.matformer_selection();
     let original_model_id = model_id_of(&model_type).to_string();
+    apply_sku_alias_resolution(&mut model_type);
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let api_id_override =
         (model_id_of(&model_type) != original_model_id).then(|| original_model_id.clone());
@@ -815,6 +816,22 @@ pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
         ModelType::Speech { model, .. } => &model.model_id,
         ModelType::Animation { model_id, .. } => model_id,
         ModelType::Embedding { model, .. } => &model.model_id,
+    }
+}
+
+pub(crate) fn apply_sku_alias_resolution(model_type: &mut ModelType) {
+    let raw = model_id_of(model_type);
+    if raw.contains('/') || Path::new(raw).exists() {
+        return;
+    }
+    let resolved = hanzo_server_core::model_registry::lookup(raw).or_else(|| {
+        hanzo_server_core::model_registry::all()
+            .iter()
+            .find(|entry| entry.sku.eq_ignore_ascii_case(raw))
+    });
+    if let Some(sku) = resolved {
+        info!("Resolved Zen SKU `{raw}` -> `{}`", sku.hf_repo);
+        *model_id_mut(model_type) = sku.hf_repo.to_string();
     }
 }
 

@@ -90,6 +90,37 @@ pub struct ZenSku {
 /// artifacts (verified 2026-06-06 against huggingface.co/zenlm).
 fn zen_sku_table() -> &'static [ZenSku] {
     &[
+        // ---- Zen6 ladder (canonical) ---------------------------------------
+        // zen6-nano*: Bonsai-2 Small (Qwen3.5 hybrid GDN + MRoPE VL) 2-bit MLX
+        // Hadamard weights served natively on Metal/CUDA/CPU via Qwen3_5Loader.
+        ZenSku {
+            sku: "zen6-nano",
+            hf_repo: "zenlm/zen6-nano",
+            arch: ArchKind::SupportedVision("qwen3_5"),
+            quant: None,
+            modality: Modality::Vision,
+        },
+        ZenSku {
+            sku: "zen6-nano-2B",
+            hf_repo: "zenlm/zen6-nano-2b",
+            arch: ArchKind::SupportedVision("qwen3_5"),
+            quant: None,
+            modality: Modality::Vision,
+        },
+        ZenSku {
+            sku: "zen6-nano-4B",
+            hf_repo: "zenlm/zen6-nano-4b",
+            arch: ArchKind::SupportedVision("qwen3_5"),
+            quant: None,
+            modality: Modality::Vision,
+        },
+        ZenSku {
+            sku: "zen6-flash",
+            hf_repo: "zenlm/zen6-flash",
+            arch: ArchKind::SupportedVision("qwen3_5moe"),
+            quant: None,
+            modality: Modality::Vision,
+        },
         // ---- Zen5 ladder (canonical) ---------------------------------------
         // zen5-nano-*: Zen VL dense edge tier (Qwen3-VL arch). The multimodal
         // pipeline (Qwen3VLLoader) is ported, so these are SupportedVision.
@@ -461,7 +492,7 @@ mod tests {
                 },
                 // Multimodal loaders: MultimodalLoaderType arch names.
                 ArchKind::SupportedVision(name) => assert!(
-                    matches!(*name, "qwen3-vl" | "qwen3-omni"),
+                    matches!(*name, "qwen3-vl" | "qwen3-omni" | "qwen3_5" | "qwen3_5moe"),
                     "SKU `{}` uses unexpected vision arch `{}`",
                     e.sku,
                     name

@@ -39,7 +39,7 @@ pub struct VisionConfig {
     pub intermediate_size: usize,
     #[serde(default = "default_num_heads")]
     pub num_heads: usize,
-    #[serde(default = "default_in_channels")]
+    #[serde(default = "default_in_channels", alias = "in_channels")]
     pub in_chans: usize,
     #[serde(default = "default_patch_size")]
     pub patch_size: usize,

@@ -60,7 +60,7 @@ pub struct TextConfig {
     // Other
     #[serde(default)]
     pub tie_word_embeddings: bool,
-    #[serde(default)]
+    #[serde(default, alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
 }
 
@@ -127,5 +127,6 @@ pub struct Config {
     pub vision_end_token_id: u32,
     pub tie_word_embeddings: bool,
     /// Top-level quantization_config takes precedence
+    #[serde(default, alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
 }

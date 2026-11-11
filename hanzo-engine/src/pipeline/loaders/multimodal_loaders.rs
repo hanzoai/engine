@@ -281,7 +281,7 @@ impl FromStr for MultimodalLoaderType {
             "gemma4" => Ok(Self::Gemma4),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
-            "qwen3_5" => Ok(Self::Qwen3_5),
+            "qwen3_5" | "prism_hadamard_qwen35" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "qwen3_omni_moe" => Ok(Self::Qwen3Omni),
             "voxtral" => Ok(Self::Voxtral),
@@ -326,6 +326,11 @@ struct AutoMultimodalLoaderConfig {
     /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
     #[serde(default)]
     multimodal: Option<serde_json::Value>,
+    /// MLX / Prism checkpoints may specify `model_type` / `base_model_type` without `architectures`.
+    #[serde(default)]
+    model_type: Option<String>,
+    #[serde(default)]
+    base_model_type: Option<String>,
 }
 
 /// Automatically selects a MultimodalModelLoader implementation based on the JSON `architectures` field.
@@ -339,6 +344,25 @@ impl AutoMultimodalLoader {
         if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
             once_log_debug("Automatic loader type determined to be `voxtral`");
             return Ok(Box::new(VoxtralLoader));
+        }
+
+        if auto_cfg.architectures.is_empty() {
+            let mt = auto_cfg
+                .model_type
+                .as_deref()
+                .or(auto_cfg.base_model_type.as_deref())
+                .unwrap_or("");
+            match mt {
+                "prism_hadamard_qwen35" | "qwen3_5" => {
+                    once_log_debug("Automatic loader type determined to be `qwen3_5`");
+                    return Ok(Box::new(Qwen3_5Loader));
+                }
+                "qwen3_5_moe" | "qwen3_5moe" => {
+                    once_log_debug("Automatic loader type determined to be `qwen3_5moe`");
+                    return Ok(Box::new(Qwen3_5MoeLoader));
+                }
+                _ => {}
+            }
         }
 
         if auto_cfg.architectures.len() != 1 {
@@ -6603,9 +6627,10 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
                     // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
+                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2) / weight_pack_factor;
                     // in_proj_ba: (2 * num_v_heads, hidden)
-                    let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
+                    let in_proj_ba =
+                        hidden * (text_cfg.linear_num_value_heads * 2) / weight_pack_factor;
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * text_cfg.linear_conv_kernel_dim;
                     let dt_bias = text_cfg.linear_num_value_heads;
@@ -6983,9 +7008,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
                     // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
+                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2) / weight_pack_factor;
                     // in_proj_ba: (2 * num_v_heads, hidden)
-                    let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
+                    let in_proj_ba =
+                        hidden * (text_cfg.linear_num_value_heads * 2) / weight_pack_factor;
                     // out_proj: value_dim -> hidden
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     // conv1d weight

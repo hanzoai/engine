@@ -45,7 +45,10 @@ pub fn embedding(
     config: &Option<QuantizedConfig>,
 ) -> Result<Embedding> {
     // AFQ quantizes the embeddings too, unless its recipe leaves this module unquantized.
-    let afq = config.as_ref().and_then(|c| c.afq_at(&vb.prefix()));
+    let afq = config
+        .as_ref()
+        .and_then(|c| c.afq_at(&vb.prefix()))
+        .filter(|_| vb.contains_tensor("scales"));
     let embeddings = if afq.is_some() {
         let afq_layer =
             AfqLayer::afq_linear_b(out_size, in_size, config.as_ref().unwrap(), false, vb)?;
@@ -413,8 +416,24 @@ pub struct GemmaRmsNorm {
 
 impl GemmaRmsNorm {
     pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        Self::new_with_offset(size, eps, true, vb)
+    }
+
+    /// Load a Gemma/Qwen3.5 RMSNorm weight, optionally adding `+1.0`.
+    /// Pre-sanitized MLX checkpoints already fold `+1.0` into the stored weight,
+    /// so callers pass `add_unit_offset = false` when loading MLX-sanitized weights.
+    pub fn new_with_offset(
+        size: usize,
+        eps: f64,
+        add_unit_offset: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let original_weight = vb.get(size, "weight")?;
-        let weight = (&original_weight + 1.0)?;
+        let weight = if add_unit_offset {
+            (&original_weight + 1.0)?
+        } else {
+            original_weight.clone()
+        };
         Ok(Self {
             eps,
             original_weight,

@@ -92,6 +92,7 @@ impl FullAttention {
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<hanzo_quant::Comm>,
+        add_unit_offset: bool,
     ) -> Result<Self> {
         Self::load_parts(
             mapper.set_device(layer_idx, vb.clone(), loading_isq),
@@ -100,6 +101,7 @@ impl FullAttention {
             rotary_emb,
             paged_attn,
             comm,
+            add_unit_offset,
         )
     }
 
@@ -112,6 +114,7 @@ impl FullAttention {
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<hanzo_quant::Comm>,
+        add_unit_offset: bool,
     ) -> Result<Self> {
         let vb_sa = vb_quant.pp("self_attn");
         let num_heads = cfg.num_attention_heads;
@@ -156,8 +159,18 @@ impl FullAttention {
         )?;
 
         let vb_sa_norms = vb_plain.pp("self_attn");
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new_with_offset(
+            head_dim,
+            cfg.rms_norm_eps,
+            add_unit_offset,
+            vb_sa_norms.pp("q_norm"),
+        )?;
+        let k_norm = GemmaRmsNorm::new_with_offset(
+            head_dim,
+            cfg.rms_norm_eps,
+            add_unit_offset,
+            vb_sa_norms.pp("k_norm"),
+        )?;
 
         Ok(Self {
             q_proj,
@@ -373,6 +386,7 @@ impl DecoderLayer {
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<hanzo_quant::Comm>,
+        add_unit_offset: bool,
     ) -> Result<Self> {
         Ok(Self {
             layer_impl: LayerImpl::FullAttention(FullAttention::load_parts(
@@ -382,15 +396,18 @@ impl DecoderLayer {
                 rotary_emb,
                 paged_attn,
                 comm,
+                add_unit_offset,
             )?),
-            input_layernorm: GemmaRmsNorm::new(
+            input_layernorm: GemmaRmsNorm::new_with_offset(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                add_unit_offset,
                 vb_plain.pp("input_layernorm"),
             )?,
-            post_attention_layernorm: GemmaRmsNorm::new(
+            post_attention_layernorm: GemmaRmsNorm::new_with_offset(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                add_unit_offset,
                 vb_plain.pp("post_attention_layernorm"),
             )?,
             mlp: Mlp::new(
@@ -469,8 +486,23 @@ pub(super) struct SpecCapture {
     pub(super) positions: Tensor,
 }
 
+#[derive(Clone)]
+enum TextEmbedding {
+    Dense(Embedding),
+    Afq(Arc<hanzo_quant::AfqLayer>),
+}
+
+impl TextEmbedding {
+    fn forward(&self, input_ids: &Tensor, dtype: DType) -> Result<Tensor> {
+        match self {
+            Self::Dense(emb) => emb.forward(input_ids),
+            Self::Afq(afq) => afq.embed(input_ids, dtype),
+        }
+    }
+}
+
 pub struct Qwen3_5TextModel {
-    embed_tokens: Embedding,
+    embed_tokens: TextEmbedding,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
@@ -504,12 +536,39 @@ impl Qwen3_5TextModel {
             vb.pp("model").pp("language_model")
         };
 
-        let embed_tokens = layers::embedding(
-            cfg.vocab_size,
-            cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
-            &cfg.quantization_config,
-        )?;
+        // Pre-sanitized MLX checkpoints store channels-last `[conv_dim, kernel, 1]` Conv1d weights
+        // and have already added `+1.0` to all Gemma-style RMSNorm weights.
+        let add_unit_offset = vb_m
+            .pp("layers.0.linear_attn")
+            .get(
+                (cfg.linear_conv_dim(), cfg.linear_conv_kernel_dim, 1),
+                "conv1d.weight",
+            )
+            .is_err();
+
+        let vb_embed = mapper.set_nm_device(vb_m.pp("embed_tokens"), false);
+        let embed_tokens = if let Some((bits, group_size)) = cfg
+            .quantization_config
+            .as_ref()
+            .and_then(|q| q.afq_at(&vb_embed.prefix()))
+            .filter(|_| vb_embed.contains_tensor("scales"))
+        {
+            TextEmbedding::Afq(hanzo_quant::AfqLayer::afq_linear_typed(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                bits,
+                group_size,
+                false,
+                vb_embed,
+            )?)
+        } else {
+            TextEmbedding::Dense(layers::embedding(
+                cfg.vocab_size,
+                cfg.hidden_size,
+                vb_embed,
+                &cfg.quantization_config,
+            )?)
+        };
 
         let layer_types = cfg.layer_types();
 
@@ -569,6 +628,7 @@ impl Qwen3_5TextModel {
                         rotary_emb,
                         paged_attn,
                         &comm,
+                        add_unit_offset,
                     )?)
                 }
                 LayerType::LinearAttention => LayerImpl::LinearAttention(GatedDeltaNet::load(
@@ -582,14 +642,16 @@ impl Qwen3_5TextModel {
                 )?),
             };
 
-            let input_layernorm = GemmaRmsNorm::new(
+            let input_layernorm = GemmaRmsNorm::new_with_offset(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                add_unit_offset,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
             )?;
-            let post_attention_layernorm = GemmaRmsNorm::new(
+            let post_attention_layernorm = GemmaRmsNorm::new_with_offset(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
+                add_unit_offset,
                 mapper.set_device(
                     layer_idx,
                     vb_l.pp(layer_idx).pp("post_attention_layernorm"),
@@ -618,12 +680,13 @@ impl Qwen3_5TextModel {
             })
         })?;
 
-        let norm = GemmaRmsNorm::new(
+        let norm = GemmaRmsNorm::new_with_offset(
             cfg.hidden_size,
             cfg.rms_norm_eps,
+            add_unit_offset,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = if !tie {
+        let lm_head: Arc<dyn QuantMethod> = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
@@ -632,13 +695,13 @@ impl Qwen3_5TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            match &embed_tokens {
+                TextEmbedding::Afq(afq) => afq.clone() as Arc<dyn QuantMethod>,
+                TextEmbedding::Dense(emb) => ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
+                    mapper.cast_nm_device(emb.embeddings(), normal_loading_metadata.loading_isq)?,
+                    None,
+                ))?,
+            }
         };
 
         // Create pipeline hybrid cache
@@ -703,7 +766,7 @@ impl Qwen3_5TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.forward(input_ids, self.dtype)
     }
 
     pub(super) fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
@@ -870,9 +933,10 @@ impl Qwen3_5TextModel {
     /// The embedding and output head, lent to a draft that carries neither.
     pub(super) fn shared_heads(&self) -> crate::speculative::SpeculativeSharedHeads {
         let embed_tokens = self.embed_tokens.clone();
+        let dtype = self.dtype;
         let lm_head = Arc::clone(&self.lm_head);
         crate::speculative::SpeculativeSharedHeads {
-            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids)),
+            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids, dtype)),
             lm_head: Arc::new(move |hidden: &Tensor| lm_head.forward(hidden)),
         }
     }
@@ -936,7 +1000,16 @@ impl IsqModel for Qwen3_5TextModel {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_lm = uvb.pp("model").pp("language_model");
-        uvb_lm.pp("embed_tokens").add(&self.embed_tokens);
+        match &self.embed_tokens {
+            TextEmbedding::Dense(emb) => {
+                uvb_lm.pp("embed_tokens").add(emb);
+            }
+            TextEmbedding::Afq(afq) => {
+                if let Ok(w) = afq.dequantize_w() {
+                    uvb_lm.pp("embed_tokens").add_tensor("weight", w);
+                }
+            }
+        }
         uvb_lm.pp("norm").add(&self.norm);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {

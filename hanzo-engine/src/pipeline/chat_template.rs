@@ -536,6 +536,104 @@ fn defined<T: Into<Value>>(value: Option<T>) -> Value {
     value.map(Into::into).unwrap_or(Value::UNDEFINED)
 }
 
+/// Normalize OpenAI Responses `developer` role and multi-`system` sequences for
+/// Jinja templates that do not handle `developer` or non-initial `system` messages.
+fn normalize_developer_and_system_messages(
+    messages: &mut Vec<IndexMap<String, MessageContent>>,
+    template: &str,
+) {
+    let extract_text = |content: Option<&MessageContent>| -> String {
+        match content {
+            Some(Either::Left(s)) => s.clone(),
+            Some(Either::Right(parts)) => parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join(""),
+            None => String::new(),
+        }
+    };
+    fn role_of(msg: &IndexMap<String, MessageContent>) -> Option<&str> {
+        match msg.get("role") {
+            Some(Either::Left(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    let has_developer = messages.iter().any(|m| role_of(m) == Some("developer"));
+    if !template.contains("developer") && has_developer {
+        for msg in messages.iter_mut() {
+            if role_of(msg) == Some("developer") {
+                msg.insert("role".to_string(), Either::Left("system".to_string()));
+            }
+        }
+    }
+
+    let system_count = messages
+        .iter()
+        .filter(|m| role_of(m) == Some("system"))
+        .count();
+    let non_first_system = system_count > 0 && role_of(&messages[0]) != Some("system");
+    if system_count <= 1
+        && (!non_first_system || !template.contains("System message must be at the beginning"))
+    {
+        return;
+    }
+
+    let strict_system_first = template.contains("System message must be at the beginning")
+        || !template.contains("developer");
+    if !strict_system_first || messages.is_empty() {
+        return;
+    }
+
+    let mut out: Vec<IndexMap<String, MessageContent>> = Vec::with_capacity(messages.len());
+    let mut leading_system_parts: Vec<String> = Vec::new();
+    let mut in_leading_system = true;
+
+    for mut msg in messages.drain(..) {
+        if role_of(&msg) == Some("system") {
+            let text = extract_text(msg.get("content"));
+            if in_leading_system {
+                if !text.trim().is_empty() {
+                    leading_system_parts.push(text);
+                }
+            } else if template.contains("System message must be at the beginning") {
+                msg.insert("role".to_string(), Either::Left("user".to_string()));
+                msg.insert("content".to_string(), Either::Left(text));
+                out.push(msg);
+            } else {
+                out.push(msg);
+            }
+        } else {
+            if in_leading_system {
+                in_leading_system = false;
+                if !leading_system_parts.is_empty() {
+                    let mut sys_msg = IndexMap::new();
+                    sys_msg.insert("role".to_string(), Either::Left("system".to_string()));
+                    sys_msg.insert(
+                        "content".to_string(),
+                        Either::Left(leading_system_parts.join("\n\n")),
+                    );
+                    out.push(sys_msg);
+                }
+            }
+            out.push(msg);
+        }
+    }
+
+    if in_leading_system && !leading_system_parts.is_empty() {
+        let mut sys_msg = IndexMap::new();
+        sys_msg.insert("role".to_string(), Either::Left("system".to_string()));
+        sys_msg.insert(
+            "content".to_string(),
+            Either::Left(leading_system_parts.join("\n\n")),
+        );
+        out.push(sys_msg);
+    }
+
+    *messages = out;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
     mut messages: Vec<IndexMap<String, MessageContent>>,
@@ -600,12 +698,15 @@ pub fn apply_chat_template_to(
         }
     };
 
-    // Pre-process messages for Gemma 4 tool templates: parse JSON-string
-    // tool_call arguments into objects (so the template renders them in
-    // <|"|> format), and merge role:"tool" messages into tool_responses on
-    // the preceding assistant message.
-    if is_gemma4_tool_template(&resolved_template) {
+    normalize_developer_and_system_messages(&mut messages, &resolved_template);
+
+    // Pre-process tool_call arguments from JSON strings into objects for templates
+    // that iterate `arguments|items` (Qwen3.5 / Zen6 XML tools) or Gemma 4 `<|"|>`.
+    if is_gemma4_tool_template(&resolved_template) || resolved_template.contains("arguments|items")
+    {
         parse_gemma4_tool_call_arguments(&mut messages);
+    }
+    if is_gemma4_tool_template(&resolved_template) {
         preprocess_gemma4_tool_messages(&mut messages);
     }
 
@@ -1040,5 +1141,57 @@ mod tests {
         assert_eq!(defaults.repetition_penalty, None);
         assert_eq!(defaults.max_new_tokens, None);
         assert_eq!(defaults.max_length, None);
+    }
+
+    #[test]
+    fn developer_role_and_xml_tool_arguments_render_on_strict_templates() {
+        let strict_tpl = ChatTemplateValue(Either::Left(
+            "{%- if messages[0].role == 'system' %}<sys>{{ messages[0].content }}</sys>{%- endif %}\
+             {%- for message in messages %}\
+             {%- if message.role == 'system' %}{%- if not loop.first %}{{ raise_exception('System message must be at the beginning.') }}{%- endif %}\
+             {%- elif message.role == 'user' %}<u:{{ message.content }}>\
+             {%- elif message.role == 'assistant' %}<a:{%- if message.tool_calls %}{%- for tc in message.tool_calls %}{% set tc = tc.function %}{{ tc.name }}:{% for k, v in tc.arguments|items %}{{ k }}={{ v }}{% endfor %}{% endfor %}{%- endif %}>\
+             {%- elif message.role == 'tool' %}<t:{{ message.content }}>\
+             {%- else %}{{ raise_exception('Unexpected message role.') }}{%- endif %}\
+             {%- endfor %}"
+                .to_string(),
+        ));
+        let messages = vec![
+            IndexMap::from([
+                ("role".to_string(), Either::Left("system".to_string())),
+                (
+                    "content".to_string(),
+                    Either::Left("base instructions".to_string()),
+                ),
+            ]),
+            IndexMap::from([
+                ("role".to_string(), Either::Left("developer".to_string())),
+                (
+                    "content".to_string(),
+                    Either::Left("sandbox rules".to_string()),
+                ),
+            ]),
+            user_text_message("run ls"),
+            assistant_message_with_tool_calls(),
+            IndexMap::from([
+                ("role".to_string(), Either::Left("tool".to_string())),
+                ("content".to_string(), Either::Left("ok".to_string())),
+            ]),
+        ];
+        let rendered = apply_chat_template_to(
+            messages,
+            true,
+            None,
+            None,
+            None,
+            &strict_tpl,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .expect("developer role and string tool arguments must render cleanly");
+        assert!(rendered.contains("<sys>base instructions\n\nsandbox rules</sys>"));
+        assert!(rendered.contains("get_weather:city=Boston"));
     }
 }

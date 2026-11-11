@@ -831,6 +831,10 @@ pub struct OpenResponsesStreamer {
     accumulated_text: String,
     /// Accumulated reasoning for the current output
     accumulated_reasoning: String,
+    /// Accumulated completed function_call output items
+    accumulated_tool_calls: Vec<OutputItem>,
+    /// Stable message item id across output_item.added and output_item.done
+    message_item_id: Option<String>,
     /// Whether content part has been added
     content_part_added: bool,
     /// Whether output item has been added
@@ -876,6 +880,8 @@ impl OpenResponsesStreamer {
             pending_events: Vec::new(),
             accumulated_text: String::new(),
             accumulated_reasoning: String::new(),
+            accumulated_tool_calls: Vec::new(),
+            message_item_id: None,
             content_part_added: false,
             output_item_added: false,
             store,
@@ -922,8 +928,12 @@ impl OpenResponsesStreamer {
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
             let content = vec![OutputContent::text(self.accumulated_text.clone())];
+            let msg_id = self
+                .message_item_id
+                .clone()
+                .unwrap_or_else(|| format!("msg_{}", Uuid::new_v4()));
             let item = OutputItem::message(
-                format!("msg_{}", Uuid::new_v4()),
+                msg_id,
                 content,
                 if status == ResponseStatus::Completed {
                     ItemStatus::Completed
@@ -931,9 +941,10 @@ impl OpenResponsesStreamer {
                     ItemStatus::InProgress
                 },
             );
-            resource.output = vec![item];
+            resource.output.push(item);
             resource.output_text = Some(self.accumulated_text.clone());
         }
+        resource.output.extend(self.accumulated_tool_calls.clone());
 
         // Include reasoning if available
         if !self.accumulated_reasoning.is_empty() {
@@ -1095,11 +1106,10 @@ impl futures::Stream for OpenResponsesStreamer {
                             if !self.output_item_added {
                                 self.output_item_added = true;
                                 let seq = self.streaming_state.next_sequence_number();
-                                let item = OutputItem::message(
-                                    format!("msg_{}", Uuid::new_v4()),
-                                    vec![],
-                                    ItemStatus::InProgress,
-                                );
+                                let msg_id = format!("msg_{}", Uuid::new_v4());
+                                self.message_item_id = Some(msg_id.clone());
+                                let item =
+                                    OutputItem::message(msg_id, vec![], ItemStatus::InProgress);
                                 events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
                                     sequence_number: seq,
                                     output_index: 0,
@@ -1136,16 +1146,53 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Handle tool calls
                         if let Some(tool_calls) = &choice.delta.tool_calls {
                             for tool_call in tool_calls {
-                                // Emit function call arguments delta
+                                let output_index = usize::from(self.output_item_added)
+                                    + self.accumulated_tool_calls.len();
+                                let fc_id = format!("fc_{}", Uuid::new_v4());
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item: OutputItem::function_call(
+                                        fc_id.clone(),
+                                        tool_call.id.clone(),
+                                        tool_call.function.name.clone(),
+                                        String::new(),
+                                        ItemStatus::InProgress,
+                                    ),
+                                });
                                 let seq = self.streaming_state.next_sequence_number();
                                 events_to_emit.push(
                                     OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
                                         sequence_number: seq,
-                                        output_index: 0,
+                                        output_index,
                                         call_id: tool_call.id.clone(),
                                         delta: tool_call.function.arguments.clone(),
                                     },
                                 );
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(
+                                    OpenResponsesStreamEvent::FunctionCallArgumentsDone {
+                                        sequence_number: seq,
+                                        output_index,
+                                        call_id: tool_call.id.clone(),
+                                        arguments: tool_call.function.arguments.clone(),
+                                    },
+                                );
+                                let completed_item = OutputItem::function_call(
+                                    fc_id,
+                                    tool_call.id.clone(),
+                                    tool_call.function.name.clone(),
+                                    tool_call.function.arguments.clone(),
+                                    ItemStatus::Completed,
+                                );
+                                self.accumulated_tool_calls.push(completed_item.clone());
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item: completed_item,
+                                });
                             }
                         }
                     }
@@ -1168,11 +1215,11 @@ impl futures::Stream for OpenResponsesStreamer {
                         if self.output_item_added {
                             let seq = self.streaming_state.next_sequence_number();
                             let content = vec![OutputContent::text(self.accumulated_text.clone())];
-                            let item = OutputItem::message(
-                                format!("msg_{}", Uuid::new_v4()),
-                                content,
-                                ItemStatus::Completed,
-                            );
+                            let msg_id = self
+                                .message_item_id
+                                .clone()
+                                .unwrap_or_else(|| format!("msg_{}", Uuid::new_v4()));
+                            let item = OutputItem::message(msg_id, content, ItemStatus::Completed);
                             events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
                                 sequence_number: seq,
                                 output_index: 0,

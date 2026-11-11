@@ -430,6 +430,7 @@ mod tests {
 
 #[derive(Deserialize)]
 pub struct QuantizationConfigShim {
+    #[serde(default, alias = "quantization")]
     quantization_config: Option<QuantizedConfig>,
 }
 

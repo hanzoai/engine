@@ -14,9 +14,10 @@ use hanzo_server_core::server::ServerBuilder;
 #[cfg(feature = "code-execution")]
 use super::serve::build_code_exec_config;
 use super::serve::{
-    apply_agent_mode, apply_quant_resolution, convert_to_model_selected, default_sandbox_profile,
-    extract_device_settings, extract_isq_setting, extract_paged_attn_settings,
-    extract_sandbox_settings, load_mcp_config, log_agent_runtime, validate_agent_options,
+    apply_agent_mode, apply_quant_resolution, apply_sku_alias_resolution,
+    convert_to_model_selected, default_sandbox_profile, extract_device_settings,
+    extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
+    log_agent_runtime, validate_agent_options,
 };
 use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
@@ -43,6 +44,7 @@ pub async fn run_interactive(
 
     // Convert our clean args to ModelSelected
     let matformer = runtime.matformer_selection();
+    apply_sku_alias_resolution(&mut model_type);
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     // Inherit the target's context window for the speculative draft (before model_selected is moved).
