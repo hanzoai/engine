@@ -1,0 +1,198 @@
+name: Release Hanzo Engine
+
+# Runs on git.hanzo.ai:
+#   * Linux legs run on [linux-amd64] and cross-compile via cargo-zigbuild.
+#   * macOS legs run on [metal] (native Apple Silicon runner) with Metal + Accelerate.
+#   * Checksummed `hanzo-engine-<os>-<arch>.tar.gz` + `.sha256` bundles are
+#     uploaded to GitHub Releases (for `hanzo.sh`) and Forge Releases.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to build + release (e.g. v1.7.104)'
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    name: hanzo-engine-${{ matrix.id }}
+    runs-on: [linux-amd64]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - id: linux-amd64
+            zigtarget: x86_64-unknown-linux-gnu.2.17
+            dir: x86_64-unknown-linux-gnu
+          - id: linux-arm64
+            zigtarget: aarch64-unknown-linux-gnu.2.17
+            dir: aarch64-unknown-linux-gnu
+    env:
+      CARGO_ENCODED_RUSTFLAGS: ""
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+
+      - name: Toolchain deps
+        run: |
+          set -euo pipefail
+          missing=""
+          for t in cc cmake pkg-config curl git jq tar xz python3; do command -v "$t" >/dev/null || missing="$missing $t"; done
+          [ -n "$missing" ] || exit 0
+          apt=apt-get; [ "$(id -u)" = 0 ] || apt="sudo apt-get"
+          $apt update
+          $apt install -y --no-install-recommends build-essential cmake pkg-config curl git jq tar xz-utils python3 python3-pip ca-certificates
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.dir }}
+
+      - name: Zig + cargo-zigbuild
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --quiet --break-system-packages 'ziglang==0.13.0' || \
+            python3 -m pip install --user --quiet 'ziglang==0.13.0'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v cargo-zigbuild >/dev/null 2>&1 || cargo install --locked cargo-zigbuild@0.23.0
+
+      - name: Build hanzo-engine (${{ matrix.id }})
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+          cargo zigbuild --release --package hanzo-cli --bin hanzo-engine \
+            --target ${{ matrix.zigtarget }}
+
+      - name: Package + publish to GitHub Releases
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
+          TAG: ${{ inputs.version || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SRC="target/${{ matrix.dir }}/release/hanzo-engine"
+          test -f "$SRC"
+          ASSET="hanzo-engine-${{ matrix.id }}.tar.gz"
+          tar -czf "$ASSET" -C "$(dirname "$SRC")" hanzo-engine
+          sha256sum "$ASSET" > "$ASSET.sha256"
+
+          api="https://api.github.com/repos/$REPO"
+          uploads="https://uploads.github.com/repos/$REPO"
+          auth=(-H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json")
+          release_id() {
+            curl -s "${auth[@]}" "$api/releases?per_page=100" \
+              | jq -r --arg t "$TAG" 'first(.[] | select(.tag_name == $t) | .id) // empty'
+          }
+          id="$(release_id)"
+          if [ -z "$id" ]; then
+            id="$(curl -s -X POST "${auth[@]}" \
+              -d "$(jq -nc --arg t "$TAG" '{tag_name:$t,name:$t,draft:true,generate_release_notes:true}')" \
+              "$api/releases" | jq -r '.id // empty')"
+          fi
+          [ -n "$id" ] || id="$(release_id)"
+          [ -n "$id" ] || { echo "could not create or find release $TAG"; exit 1; }
+          for f in "$ASSET" "$ASSET.sha256"; do
+            old="$(curl -s "${auth[@]}" "$api/releases/$id/assets" | jq -r --arg n "$f" '.[] | select(.name==$n) | .id')"
+            [ -n "$old" ] && curl -s -X DELETE "${auth[@]}" "$api/releases/assets/$old" >/dev/null
+            code="$(curl -s -o /tmp/up.json -w '%{http_code}' -X POST "${auth[@]}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" "$uploads/releases/$id/assets?name=$f")"
+            [ "$code" = "201" ] || { echo "upload $f failed ($code)"; cat /tmp/up.json; exit 1; }
+          done
+
+  build-darwin:
+    name: hanzo-engine-darwin-${{ matrix.arch }}
+    runs-on: [metal]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: amd64
+            target: x86_64-apple-darwin
+    env:
+      CARGO_ENCODED_RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+      - name: Build + package + publish to GitHub Releases
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
+          TAG: ${{ inputs.version || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+          rustup target add ${{ matrix.target }}
+          cargo build --release --package hanzo-cli --bin hanzo-engine \
+            --target ${{ matrix.target }} --features metal,accelerate
+          SRC="target/${{ matrix.target }}/release/hanzo-engine"
+          strip "$SRC" || true
+          ASSET="hanzo-engine-darwin-${{ matrix.arch }}.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$ASSET" -C "$(dirname "$SRC")" hanzo-engine
+          shasum -a 256 "$ASSET" > "$ASSET.sha256"
+
+          api="https://api.github.com/repos/$REPO"
+          uploads="https://uploads.github.com/repos/$REPO"
+          auth=(-H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json")
+          release_id() {
+            curl -s "${auth[@]}" "$api/releases?per_page=100" \
+              | jq -r --arg t "$TAG" 'first(.[] | select(.tag_name == $t) | .id) // empty'
+          }
+          id="$(release_id)"
+          if [ -z "$id" ]; then
+            id="$(curl -s -X POST "${auth[@]}" \
+              -d "$(jq -nc --arg t "$TAG" '{tag_name:$t,name:$t,draft:true,generate_release_notes:true}')" \
+              "$api/releases" | jq -r '.id // empty')"
+          fi
+          [ -n "$id" ] || id="$(release_id)"
+          [ -n "$id" ] || { echo "could not create or find release $TAG"; exit 1; }
+          for f in "$ASSET" "$ASSET.sha256"; do
+            old="$(curl -s "${auth[@]}" "$api/releases/$id/assets" | jq -r --arg n "$f" '.[] | select(.name==$n) | .id')"
+            [ -n "$old" ] && curl -s -X DELETE "${auth[@]}" "$api/releases/assets/$old" >/dev/null
+            code="$(curl -s -o /tmp/up.json -w '%{http_code}' -X POST "${auth[@]}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" "$uploads/releases/$id/assets?name=$f")"
+            [ "$code" = "201" ] || { echo "upload $f failed ($code)"; cat /tmp/up.json; exit 1; }
+          done
+
+  release:
+    name: release
+    needs: [build-linux, build-darwin]
+    runs-on: [linux-amd64]
+    steps:
+      - name: Publish the draft
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
+          TAG: ${{ inputs.version || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$REPO"
+          auth=(-H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json")
+          id="$(curl -s "${auth[@]}" "$api/releases?per_page=100" \
+            | jq -r --arg t "$TAG" 'first(.[] | select(.tag_name == $t) | .id) // empty')"
+          [ -n "$id" ] || { echo "::error::no release for $TAG"; exit 1; }
+          curl -fsS -X PATCH "${auth[@]}" -d '{"draft":false}' "$api/releases/$id" \
+            | jq -r '"published \(.tag_name): \(.html_url)"'
