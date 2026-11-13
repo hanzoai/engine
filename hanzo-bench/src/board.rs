@@ -616,6 +616,7 @@ fn sha256(path: Option<&String>) -> Result<Option<String>> {
     Ok(Some(format!("{:x}", hasher.finalize())))
 }
 
+#[cfg(unix)]
 fn uname() -> (String, String) {
     // SAFETY: utsname is plain data the kernel fills; a failed call leaves it zeroed.
     let mut u: libc::utsname = unsafe { std::mem::zeroed() };
@@ -637,6 +638,20 @@ fn uname() -> (String, String) {
     ]
     .map(field);
     (all[1].clone(), all.join(" "))
+}
+
+#[cfg(not(unix))]
+fn uname() -> (String, String) {
+    let host = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    let summary = format!(
+        "{} {} {}",
+        std::env::consts::OS,
+        host,
+        std::env::consts::ARCH
+    );
+    (host, summary)
 }
 
 /// Pin a run: the harness's facts, the box's name and clock, and digests of both binaries and
