@@ -35,6 +35,8 @@ const KNOWN_DTYPES: &[GgmlDType] = &[
     GgmlDType::Q5K,
     GgmlDType::Q6K,
     GgmlDType::Q8K,
+    GgmlDType::PQ2_0,
+    GgmlDType::PTQ1_0,
     // Add newer ones here if Hanzo adds more
 ];
 

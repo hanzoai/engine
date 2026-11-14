@@ -280,10 +280,7 @@ pub(crate) fn settle() {
             guard.clear();
         }
         if let Ok(mut guard) = global_paged_session_pool().write() {
-            guard.clear();
-        }
-        if let Ok(mut q) = pending_paged_ops().lock() {
-            q.clear();
+            guard.retain(|_, e| e.session.clustered_blocks > 0);
         }
         SETTLED.store(generation, Ordering::Release);
     }
@@ -470,6 +467,108 @@ impl LsaConfig {
     /// Parse an `LsaConfig` from a YAML string.
     pub fn from_yaml_str(yaml_str: &str) -> std::result::Result<Self, serde_saphyr::Error> {
         serde_saphyr::from_str(yaml_str)
+    }
+
+    /// Validate configuration bounds before installation.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.window_size < 4 || self.window_size > 65_536 {
+            return Err(format!(
+                "window_size must be in 4..=65536, got {}",
+                self.window_size
+            ));
+        }
+        if self.sink_size > 4_096 {
+            return Err(format!("sink_size must be <= 4096, got {}", self.sink_size));
+        }
+        if self.top_k == 0 || self.top_k > 65_536 {
+            return Err(format!("top_k must be in 1..=65536, got {}", self.top_k));
+        }
+        if self.top_p == 0 || self.top_p > 65_536 {
+            return Err(format!("top_p must be in 1..=65536, got {}", self.top_p));
+        }
+        if self.pool_size == 0 || self.pool_size > self.window_size {
+            return Err(format!(
+                "pool_size must be in 1..=window_size ({}), got {}",
+                self.window_size, self.pool_size
+            ));
+        }
+        if self.bucket_size == 0 || self.bucket_size > self.window_size {
+            return Err(format!(
+                "bucket_size must be in 1..=window_size ({}), got {}",
+                self.window_size, self.bucket_size
+            ));
+        }
+        if self.bucket_cap < self.bucket_size || self.bucket_cap > self.window_size {
+            return Err(format!(
+                "bucket_cap must be in bucket_size..=window_size ({}..={}), got {}",
+                self.bucket_size, self.window_size, self.bucket_cap
+            ));
+        }
+        if self.rotary_dim > 1_024 || self.rotary_dim % 2 != 0 {
+            return Err(format!(
+                "rotary_dim must be an even integer in 0..=1024, got {}",
+                self.rotary_dim
+            ));
+        }
+        if self.min_seq_len > 1_048_576 {
+            return Err(format!(
+                "min_seq_len must be <= 1048576, got {}",
+                self.min_seq_len
+            ));
+        }
+        if self.top_level > 8 {
+            return Err(format!("top_level must be <= 8, got {}", self.top_level));
+        }
+        if self.node_bucket_size == 0 || self.node_bucket_size > 1_024 {
+            return Err(format!(
+                "node_bucket_size must be in 1..=1024, got {}",
+                self.node_bucket_size
+            ));
+        }
+        if self.node_cluster_block_size == 0 || self.node_cluster_block_size > 65_536 {
+            return Err(format!(
+                "node_cluster_block_size must be in 1..=65536, got {}",
+                self.node_cluster_block_size
+            ));
+        }
+        if self.beam_width == 0 || self.beam_width > 65_536 {
+            return Err(format!(
+                "beam_width must be in 1..=65536, got {}",
+                self.beam_width
+            ));
+        }
+        if self.start_nodes == 0 || self.start_nodes > 65_536 {
+            return Err(format!(
+                "start_nodes must be in 1..=65536, got {}",
+                self.start_nodes
+            ));
+        }
+        if let Some((rank, dev)) = self.bucket_shape {
+            if rank == 0 || rank > 256 || !dev.is_finite() || !(0.0..=64.0).contains(&dev) {
+                return Err(format!(
+                    "bucket_shape requires rank in 1..=256 and finite deviations in 0.0..=64.0, got ({rank}, {dev})"
+                ));
+            }
+        }
+        if let Some(eb) = self.early_budget {
+            if eb.position > 1_048_576
+                || eb.top_p == 0
+                || eb.top_p > 65_536
+                || eb.top_k == 0
+                || eb.top_k > 65_536
+            {
+                return Err(format!(
+                    "early_budget out of valid bounds: position={}, top_p={}, top_k={}",
+                    eb.position, eb.top_p, eb.top_k
+                ));
+            }
+        }
+        if let Some(dim) = self.pca_index_dim {
+            if dim == 0 || dim > 4_096 {
+                return Err(format!("pca_index_dim must be in 1..=4096, got {dim}"));
+            }
+        }
+        Ok(())
     }
 
     /// Install this `LsaConfig` as the active engine-wide LSA routing configuration.
@@ -2455,13 +2554,11 @@ where
         hanzo_ml::bail!("paged_lsa_sdpa called with empty block_table or kv_len");
     }
 
-    let w = lsa_cfg.window_size.max(16);
     let cluster_upto = if ctx.allow_tail_close {
         ctx.kv_len
     } else {
         ctx.q_offset
     };
-    let target_closed = cluster_upto / w;
 
     let layer_key = tensor_storage_key(ctx.key_cache);
     let block_0 = ctx.block_table[0];
@@ -2485,12 +2582,19 @@ where
     entry._source = ctx.key_cache.clone();
     entry.used = now;
 
-    if entry.session.config != *lsa_cfg || entry.generation != generation {
+    // Protect in-flight sequences (`ctx.q_offset > 0 && entry.session.clustered_blocks > 0`)
+    // from unexpected runtime config mutations: adopt a new `LsaConfig` only at sequence start
+    // (`ctx.q_offset == 0`) or when no blocks have been clustered yet.
+    let in_flight = ctx.q_offset > 0 && entry.session.clustered_blocks > 0;
+    if !in_flight && (entry.session.config != *lsa_cfg || entry.generation != generation) {
         entry.session.config = lsa_cfg.clone();
         entry.session.reset();
         entry.block_ids.clear();
         entry.generation = generation;
     }
+
+    let w = entry.session.config.window_size.max(16);
+    let target_closed = cluster_upto / w;
 
     // Reconcile prefix physical block identity in case prefix blocks were evicted/reallocated
     // or an earlier truncation trimmed `clustered_blocks` behind `entry.block_ids`.
@@ -3615,6 +3719,135 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_lsa_config_validate_and_inflight_session_isolation() -> Result<()> {
+        assert!(LsaConfig::zen_27b().validate().is_ok());
+        assert!(LsaConfig::default().with_window_size(0).validate().is_err());
+        assert!(LsaConfig::default().with_budget(0, 512).validate().is_err());
+        assert!(LsaConfig::default().with_budget(128, 0).validate().is_err());
+        assert!(LsaConfig::default()
+            .with_rotary(63, RotaryLayout::Prefix)
+            .validate()
+            .is_err());
+
+        // Verify an active in-flight Paged-LSA session (q_offset > 0 && clustered_blocks > 0)
+        // retains its initial config when LsaConfig::install mutates the global config mid-flight,
+        // and only adopts the new config when a new sequence starts at q_offset == 0.
+        let device = Device::Cpu;
+        let (b, h_q, h_kv, d_h) = (1, 4, 2, 16);
+        let sdpa_params = SdpaParams {
+            n_kv_groups: h_q / h_kv,
+            softcap: None,
+            softmax_scale: 1.0 / (d_h as f32).sqrt(),
+            sliding_window: None,
+            sinks: None,
+        };
+        let q = det_tensor((b, h_q, 96, d_h), 701, &device)?;
+        let k = det_tensor((b, h_kv, 96, d_h), 702, &device)?;
+        let v = det_tensor((b, h_kv, 96, d_h), 703, &device)?;
+        let layer_id = Tensor::zeros((1,), DType::F32, &device)?;
+        let layer_ref = Tensor::zeros((1,), DType::F32, &device)?;
+
+        let cfg_initial = LsaConfig {
+            window_size: 32,
+            sink_size: 4,
+            top_k: 16,
+            top_p: 2,
+            pool_size: 4,
+            bucket_size: 8,
+            bucket_cap: 16,
+            rotary_layout: RotaryLayout::Prefix,
+            rotary_dim: 8,
+            min_seq_len: 16,
+            ..LsaConfig::default()
+        };
+        let cfg_mutated = LsaConfig {
+            top_k: 64,
+            top_p: 8,
+            ..cfg_initial.clone()
+        };
+
+        let bt_a: Vec<usize> = (90_000..90_006).collect();
+        let bt_ref: Vec<usize> = (91_000..91_006).collect();
+
+        // Prefill [0..80) on both sessions under cfg_initial.
+        let _ = paged_lsa_sdpa(
+            &q.narrow(2, 0, 80)?,
+            &PagedKvGather {
+                key_cache: &layer_id,
+                block_size: 16,
+                block_table: &bt_a[..5],
+                kv_len: 80,
+                q_offset: 0,
+                allow_tail_close: true,
+            },
+            |s, e| Ok((k.narrow(2, s, e - s)?, v.narrow(2, s, e - s)?)),
+            &sdpa_params,
+            &cfg_initial,
+        )?;
+        let _ = paged_lsa_sdpa(
+            &q.narrow(2, 0, 80)?,
+            &PagedKvGather {
+                key_cache: &layer_ref,
+                block_size: 16,
+                block_table: &bt_ref[..5],
+                kv_len: 80,
+                q_offset: 0,
+                allow_tail_close: true,
+            },
+            |s, e| Ok((k.narrow(2, s, e - s)?, v.narrow(2, s, e - s)?)),
+            &sdpa_params,
+            &cfg_initial,
+        )?;
+
+        // Simulate a runtime config mutation via LsaConfig::install while bt_a is in flight.
+        cfg_mutated.clone().install();
+        LsaConfig::clear();
+
+        // Decode step at q_offset = 80 passing `&cfg_mutated` to `bt_a` must still match `bt_ref`
+        // running under `&cfg_initial` because `bt_a` is already in flight (`q_offset > 0`).
+        let out_inflight = paged_lsa_sdpa(
+            &q.narrow(2, 80, 1)?,
+            &PagedKvGather {
+                key_cache: &layer_id,
+                block_size: 16,
+                block_table: &bt_a,
+                kv_len: 81,
+                q_offset: 80,
+                allow_tail_close: true,
+            },
+            |s, e| Ok((k.narrow(2, s, e - s)?, v.narrow(2, s, e - s)?)),
+            &sdpa_params,
+            &cfg_mutated,
+        )?;
+        let out_ref = paged_lsa_sdpa(
+            &q.narrow(2, 80, 1)?,
+            &PagedKvGather {
+                key_cache: &layer_ref,
+                block_size: 16,
+                block_table: &bt_ref,
+                kv_len: 81,
+                q_offset: 80,
+                allow_tail_close: true,
+            },
+            |s, e| Ok((k.narrow(2, s, e - s)?, v.narrow(2, s, e - s)?)),
+            &sdpa_params,
+            &cfg_initial,
+        )?;
+        let diff = out_inflight
+            .sub(&out_ref)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff < 1e-6,
+            "in-flight Paged-LSA session must isolate against mid-flight config mutation, diff={diff}"
+        );
+        evict_paged_lsa(90_000);
+        evict_paged_lsa(91_000);
         Ok(())
     }
 }
