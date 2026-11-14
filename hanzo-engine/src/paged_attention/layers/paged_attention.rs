@@ -258,6 +258,163 @@ fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
     crate::attention::fused_varlen(query.device(), query.dtype())
 }
 
+fn resolve_decode_kv_len(
+    input_metadata: &PagedAttentionInputMetadata,
+    use_full: bool,
+    device_context_lens: Option<&Tensor>,
+) -> usize {
+    if use_full {
+        input_metadata
+            .full_paged_context_lens_cpu
+            .as_ref()
+            .and_then(|v| v.iter().copied().max())
+            .or(input_metadata.full_max_context_len)
+    } else {
+        input_metadata
+            .paged_context_lens_cpu
+            .as_ref()
+            .and_then(|v| v.iter().copied().max())
+            .or(input_metadata.max_context_len)
+    }
+    .or_else(|| {
+        device_context_lens
+            .and_then(|t| t.to_device(&Device::Cpu).ok())
+            .and_then(|t| match t.dtype() {
+                DType::U32 => t
+                    .to_vec1::<u32>()
+                    .ok()
+                    .and_then(|v| v.into_iter().max())
+                    .map(|v| v as usize),
+                DType::I32 => t
+                    .to_vec1::<i32>()
+                    .ok()
+                    .and_then(|v| v.into_iter().max())
+                    .map(|v| v as usize),
+                _ => None,
+            })
+    })
+    .unwrap_or(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_paged_lsa(
+    query_4d: &Tensor,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    block_tables: &Tensor,
+    kv_len: usize,
+    allow_tail_close: bool,
+    attention_mask: &AttentionMask,
+    alibi_slopes: Option<&Tensor>,
+    sdpa_params: &SdpaParams,
+    flash_params: Option<&FlashParams>,
+) -> Result<Option<Tensor>> {
+    let Some(lsa_cfg) = crate::attention::LsaConfig::global() else {
+        return Ok(None);
+    };
+    let (batch_size, attention_heads, seq_len, head_size) = query_4d.dims4()?;
+    if batch_size != 1
+        || !lsa_cfg.active_for_seq_len(kv_len)
+        || sdpa_params.sliding_window.is_some()
+        || sdpa_params.sinks.is_some()
+        || alibi_slopes.is_some()
+        || flash_params.is_some_and(|fp| !fp.causal)
+        || key_cache.dtype() == DType::U32
+    {
+        return Ok(None);
+    }
+
+    let block_size = cache_block_size(key_cache, value_cache)?;
+    let needed_blocks = kv_len.div_ceil(block_size);
+    let max_bt_cols = block_tables.dim(1)?;
+    let take_cols = needed_blocks.min(max_bt_cols);
+    if take_cols == 0 {
+        return Ok(None);
+    }
+    let bt_row_tensor = block_tables
+        .narrow(0, 0, 1)?
+        .narrow(1, 0, take_cols)?
+        .to_device(&Device::Cpu)?;
+    let bt_vec: Vec<i32> = match bt_row_tensor.dtype() {
+        DType::I32 => bt_row_tensor.flatten_all()?.to_vec1::<i32>()?,
+        DType::U32 => bt_row_tensor
+            .flatten_all()?
+            .to_vec1::<u32>()?
+            .into_iter()
+            .map(|v| v as i32)
+            .collect(),
+        other => hanzo_ml::bail!("unexpected block_tables dtype {other:?}"),
+    };
+    let bt_usize: Vec<usize> = bt_vec.iter().map(|&v| v as usize).collect();
+
+    let dev = query_4d.device();
+    let dtype = query_4d.dtype();
+    let q_offset = kv_len.saturating_sub(seq_len);
+    let bt_dtype = block_tables.dtype();
+
+    let out = crate::attention::paged_lsa_sdpa(
+        query_4d,
+        &crate::attention::PagedKvGather {
+            key_cache,
+            block_size,
+            block_table: &bt_usize,
+            kv_len,
+            q_offset,
+            allow_tail_close,
+        },
+        |start_tok, end_tok| {
+            let gather_start = (start_tok / block_size) * block_size;
+            let first_blk = gather_start / block_size;
+            let last_blk = end_tok.div_ceil(block_size).min(bt_vec.len());
+            let gather_len = end_tok - gather_start;
+            let slice_i32 = &bt_vec[first_blk..last_blk];
+            let bt_slice = match bt_dtype {
+                DType::I32 => Tensor::from_slice(slice_i32, (1, slice_i32.len()), dev)?,
+                DType::U32 => {
+                    let slice_u32: Vec<u32> = slice_i32.iter().map(|&v| v as u32).collect();
+                    Tensor::from_slice(&slice_u32, (1, slice_u32.len()), dev)?
+                }
+                other => hanzo_ml::bail!("unexpected block_tables dtype {other:?}"),
+            };
+            let cu_kv = Tensor::from_slice(&[0u32, gather_len as u32], (2,), dev)?;
+            let (k_g, v_g) = gather_kv_cache_for_layout(
+                key_cache,
+                value_cache,
+                k_scale,
+                v_scale,
+                &bt_slice,
+                &cu_kv,
+                dtype,
+            )?;
+            let offset = start_tok - gather_start;
+            let slice_len = end_tok - start_tok;
+            let k_4d = k_g
+                .narrow(0, offset, slice_len)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let v_4d = v_g
+                .narrow(0, offset, slice_len)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            Ok((k_4d, v_4d))
+        },
+        sdpa_params,
+        &lsa_cfg,
+    )?;
+
+    if !matches!(attention_mask, AttentionMask::None) {
+        Ok(Some(out))
+    } else {
+        Ok(Some(out.transpose(1, 2)?.contiguous()?.reshape((
+            seq_len,
+            attention_heads,
+            head_size,
+        ))?))
+    }
+}
+
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
     k_scale: Option<Tensor>,
@@ -452,6 +609,25 @@ impl PagedAttention {
                 full_kv_lens
             };
 
+            if kv_lens.len() == 1 && crate::attention::LsaConfig::global().is_some() {
+                if let Some(att) = try_paged_lsa(
+                    query,
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    self.k_scale.as_ref(),
+                    self.v_scale.as_ref(),
+                    block_tables,
+                    kv_lens[0],
+                    seq_len == 1 || seq_len > 64,
+                    attention_mask,
+                    alibi_slopes.as_ref(),
+                    sdpa_params,
+                    flash_params,
+                )? {
+                    return Ok(att);
+                }
+            }
+
             // Resolve cu_seqlens_kv: scheduler-provided for prefix cache hits,
             // or synthesize it from the actual slot-mapping lengths on first prompt.
             let cu_kv = if sdpa_params.sliding_window.is_none() {
@@ -600,6 +776,31 @@ impl PagedAttention {
                         &mut vc,
                         slot_mapping,
                     )?;
+                    if batch_size == 1 && crate::attention::LsaConfig::global().is_some() {
+                        if let Some(bt) = resolve_block_tables(&dev) {
+                            let kv_len = if use_full {
+                                input_metadata.full_max_context_len.unwrap_or(seq_len)
+                            } else {
+                                input_metadata.max_context_len.unwrap_or(seq_len)
+                            };
+                            if let Some(att) = try_paged_lsa(
+                                query,
+                                &kc,
+                                &vc,
+                                self.k_scale.as_ref(),
+                                self.v_scale.as_ref(),
+                                bt,
+                                kv_len,
+                                true,
+                                attention_mask,
+                                alibi_slopes.as_ref(),
+                                sdpa_params,
+                                flash_params,
+                            )? {
+                                return Ok(att);
+                            }
+                        }
+                    }
                     let q3 = query
                         .transpose(1, 2)?
                         .reshape((batch_size * seq_len, attention_heads, head_size))?
@@ -686,12 +887,13 @@ impl PagedAttention {
 
         // === Decode path ===
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
+        let query_4d = query;
         let query = if seq_len > 1 {
-            query
+            query_4d
                 .transpose(1, 2)?
                 .reshape(((), attention_heads, head_size))?
         } else {
-            query.reshape(((), attention_heads, head_size))?
+            query_4d.reshape(((), attention_heads, head_size))?
         };
         let (key, value) = if write_cache {
             if seq_len > 1 {
@@ -732,6 +934,33 @@ impl PagedAttention {
 
         #[allow(clippy::cast_possible_truncation)]
         let dev = query.device().location();
+
+        if batch_size == 1 && crate::attention::LsaConfig::global().is_some() {
+            if let (Some(bt), Some(kc), Some(vc)) = (
+                resolve_block_tables(&dev),
+                key_cache.as_ref(),
+                value_cache.as_ref(),
+            ) {
+                let kv_len =
+                    resolve_decode_kv_len(input_metadata, use_full, resolve_context_lens(&dev));
+                if let Some(att) = try_paged_lsa(
+                    query_4d,
+                    kc,
+                    vc,
+                    self.k_scale.as_ref(),
+                    self.v_scale.as_ref(),
+                    bt,
+                    kv_len,
+                    seq_len == 1 || seq_len > 64,
+                    attention_mask,
+                    alibi_slopes.as_ref(),
+                    sdpa_params,
+                    flash_params,
+                )? {
+                    return Ok(att);
+                }
+            }
+        }
 
         let attention_backend = AttentionBackendKind::from_cache(
             key_cache.as_ref().unwrap(),
@@ -972,5 +1201,60 @@ impl PagedAttention {
             flash_params,
             false,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_kv_len_uses_max_verify_context_len() -> Result<()> {
+        let mut meta = PagedAttentionInputMetadata::dummy(&Device::Cpu)?;
+        // Simulate 16 staged speculative tokens at base_len = 8192: [8193..=8208].
+        let staged_lens: Vec<usize> = (8193..=8208).collect();
+        meta.full_paged_context_lens_cpu = Some(staged_lens.clone());
+        meta.full_max_context_len = Some(8208);
+        assert_eq!(resolve_decode_kv_len(&meta, true, None), 8208);
+
+        // Even when CPU vector is absent and only device tensor is passed, max() must win over first().
+        meta.full_paged_context_lens_cpu = None;
+        meta.full_max_context_len = None;
+        let staged_u32: Vec<u32> = staged_lens.iter().map(|&v| v as u32).collect();
+        let dev_lens = Tensor::from_vec(staged_u32, (16,), &Device::Cpu)?;
+        assert_eq!(resolve_decode_kv_len(&meta, true, Some(&dev_lens)), 8208);
+        Ok(())
+    }
+
+    #[test]
+    fn try_paged_lsa_bypasses_concurrent_multi_sequence_batches() -> Result<()> {
+        let dev = Device::Cpu;
+        let q = Tensor::zeros((2, 4, 1, 16), DType::F32, &dev)?;
+        let kc = Tensor::zeros((4, 2, 16, 16), DType::F32, &dev)?;
+        let vc = Tensor::zeros((4, 2, 16, 16), DType::F32, &dev)?;
+        let bt = Tensor::zeros((2, 4), DType::U32, &dev)?;
+        let sdpa_params = SdpaParams {
+            n_kv_groups: 2,
+            softcap: None,
+            softmax_scale: 0.25,
+            sliding_window: None,
+            sinks: None,
+        };
+        let out = try_paged_lsa(
+            &q,
+            &kc,
+            &vc,
+            None,
+            None,
+            &bt,
+            8192,
+            true,
+            &AttentionMask::None,
+            None,
+            &sdpa_params,
+            None,
+        )?;
+        assert!(out.is_none());
+        Ok(())
     }
 }

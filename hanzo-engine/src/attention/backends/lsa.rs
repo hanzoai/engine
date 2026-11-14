@@ -129,12 +129,29 @@ impl Default for LsaConfig {
 fn global_lsa_slot() -> &'static RwLock<Option<Arc<LsaConfig>>> {
     static GLOBAL_LSA: OnceLock<RwLock<Option<Arc<LsaConfig>>>> = OnceLock::new();
     GLOBAL_LSA.get_or_init(|| {
-        RwLock::new(Some(Arc::new(
-            LsaConfig::zen_27b()
-                .with_min_seq_len(1024)
-                .with_budget(128, 512)
-                .with_tree(1, 4, 4096, 256, 1024),
-        )))
+        let env_on = std::env::var("HANZO_LSA")
+            .ok()
+            .is_some_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"));
+        let initial = if env_on {
+            let mut cfg = LsaConfig::zen_27b();
+            if let Ok(ms) = std::env::var("HANZO_LSA_MIN_SEQ_LEN") {
+                if let Ok(val) = ms.trim().parse::<usize>() {
+                    cfg = cfg.with_min_seq_len(val);
+                }
+            }
+            if let (Ok(tp), Ok(tk)) = (
+                std::env::var("HANZO_LSA_TOP_P"),
+                std::env::var("HANZO_LSA_TOP_K"),
+            ) {
+                if let (Ok(p), Ok(k)) = (tp.trim().parse::<usize>(), tk.trim().parse::<usize>()) {
+                    cfg = cfg.with_budget(p, k);
+                }
+            }
+            Some(Arc::new(cfg))
+        } else {
+            None
+        };
+        RwLock::new(initial)
     })
 }
 
@@ -147,6 +164,33 @@ fn global_gpu_session_pool() -> &'static RwLock<HashMap<usize, Pinned<LsaGpuSess
     static GLOBAL_GPU_POOL: OnceLock<RwLock<HashMap<usize, Pinned<LsaGpuSessionCache>>>> =
         OnceLock::new();
     GLOBAL_GPU_POOL.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+struct PagedLsaEntry {
+    session: LsaGpuSessionCache,
+    /// Physical block IDs covering KV tokens `[0 .. session.clustered_blocks * window_size)`.
+    block_ids: Vec<usize>,
+    /// Keep the KV cache storage alive while the entry references its storage pointer.
+    _source: Tensor,
+    generation: u64,
+    used: u64,
+}
+
+#[derive(Clone, Copy)]
+enum PendingPagedOp {
+    Rollback { block_0: usize, keep_len: usize },
+    Evict { block_0: usize },
+}
+
+fn global_paged_session_pool() -> &'static RwLock<HashMap<(usize, usize), PagedLsaEntry>> {
+    static GLOBAL_PAGED_POOL: OnceLock<RwLock<HashMap<(usize, usize), PagedLsaEntry>>> =
+        OnceLock::new();
+    GLOBAL_PAGED_POOL.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn pending_paged_ops() -> &'static std::sync::Mutex<Vec<PendingPagedOp>> {
+    static PENDING_PAGED_OPS: OnceLock<std::sync::Mutex<Vec<PendingPagedOp>>> = OnceLock::new();
+    PENDING_PAGED_OPS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
 fn global_gpu_mask_cache() -> &'static RwLock<HashMap<(usize, usize, usize), Tensor>> {
@@ -190,6 +234,34 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// The generation the pools were last emptied for.
 static SETTLED: AtomicU64 = AtomicU64::new(0);
 
+/// Apply deferred paged-LSA rollback/eviction updates on the attention thread.
+pub(crate) fn drain_paged_lsa_ops() {
+    let ops = match pending_paged_ops().lock() {
+        Ok(mut q) if !q.is_empty() => std::mem::take(&mut *q),
+        _ => return,
+    };
+    if let Ok(mut pool) = global_paged_session_pool().write() {
+        for op in ops {
+            match op {
+                PendingPagedOp::Evict { block_0 } => {
+                    pool.retain(|&(_, b0), _| b0 != block_0);
+                }
+                PendingPagedOp::Rollback { block_0, keep_len } => {
+                    if keep_len == 0 {
+                        pool.retain(|&(_, b0), _| b0 != block_0);
+                    } else {
+                        for (&(_, b0), entry) in pool.iter_mut() {
+                            if b0 == block_0 {
+                                let _ = entry.session.truncate(keep_len);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// `install` and `clear` only mark the sessions stale; this empties the pools, and it runs
 /// on the thread that runs attention.
 ///
@@ -200,16 +272,22 @@ static SETTLED: AtomicU64 = AtomicU64::new(0);
 /// cache". Emptying the pools here frees them where the context is bound.
 pub(crate) fn settle() {
     let generation = GENERATION.load(Ordering::Acquire);
-    if SETTLED.load(Ordering::Acquire) == generation {
-        return;
+    if SETTLED.load(Ordering::Acquire) != generation {
+        if let Ok(mut guard) = global_session_pool().write() {
+            guard.clear();
+        }
+        if let Ok(mut guard) = global_gpu_session_pool().write() {
+            guard.clear();
+        }
+        if let Ok(mut guard) = global_paged_session_pool().write() {
+            guard.clear();
+        }
+        if let Ok(mut q) = pending_paged_ops().lock() {
+            q.clear();
+        }
+        SETTLED.store(generation, Ordering::Release);
     }
-    if let Ok(mut guard) = global_session_pool().write() {
-        guard.clear();
-    }
-    if let Ok(mut guard) = global_gpu_session_pool().write() {
-        guard.clear();
-    }
-    SETTLED.store(generation, Ordering::Release);
+    drain_paged_lsa_ops();
 }
 
 fn clear_global_session_pool() {
@@ -299,6 +377,22 @@ impl LsaConfig {
     /// Alias for `zen_27b()` (Hanzo Zen 6 27B).
     pub fn zen6_27b() -> Self {
         Self::zen_27b()
+    }
+
+    /// Preset for Hanzo Zen 6 Nano (`2B` / `4B` / `9B`), sharing the 64-dim prefix RoPE layout.
+    pub fn zen6_nano() -> Self {
+        Self::zen_27b()
+    }
+
+    /// Effective minimum KV length above which LSA activates for a sequence.
+    pub fn min_trigger(&self) -> usize {
+        self.min_seq_len
+            .max(self.window_size + self.sink_size + self.top_k)
+    }
+
+    /// Whether LSA should trigger for a sequence of `kv_len` tokens under this config.
+    pub fn active_for_seq_len(&self, kv_len: usize) -> bool {
+        kv_len > self.min_trigger()
     }
 
     pub fn with_min_seq_len(mut self, min_seq_len: usize) -> Self {
@@ -1415,6 +1509,92 @@ pub fn budget_at(
     (top_p, top_k)
 }
 
+/// GPU-resident descending top-`k` column indices along the last dimension of `scores` (`[rows, cols]`).
+///
+/// `hanzo_ml`'s single-block bitonic `arg_sort_last_dim` allocates `next_power_of_2(cols) * 4` bytes
+/// of dynamic shared memory per block, which exceeds CUDA's 48 KiB default shared-memory limit when
+/// `cols > 8192` (e.g., `64K+` / `128K` context under Paged-LSA). Tiling reductions into 2048-column
+/// chunks keeps shared memory at 8 KiB while staying 100% on-device.
+fn top_k_indices_last_dim(scores: &Tensor, k: usize) -> Result<Tensor> {
+    const MAX_SINGLE_PASS: usize = 4096;
+    const SAFE_SORT_TILE: usize = 2048;
+
+    let (rows, mut cur_cols) = scores.dims2()?;
+    let k = k.min(cur_cols);
+    let dev = scores.device();
+    if k == 0 {
+        return Tensor::zeros((rows, 0), DType::U32, dev);
+    }
+    if cur_cols <= MAX_SINGLE_PASS {
+        return scores
+            .arg_sort_last_dim(false)?
+            .narrow(1, 0, k)?
+            .contiguous();
+    }
+    if k > SAFE_SORT_TILE / 2 {
+        let rows_vec = scores.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let mut flat = Vec::with_capacity(rows * k);
+        for row in &rows_vec {
+            let mut order: Vec<usize> = (0..row.len()).collect();
+            order.sort_by(|&a, &b| row[b].total_cmp(&row[a]));
+            for &idx in order.iter().take(k) {
+                flat.push(idx as u32);
+            }
+        }
+        return Tensor::from_vec(flat, (rows, k), dev);
+    }
+
+    let mut cur_scores = scores.contiguous()?;
+    let mut cur_idx = Tensor::arange(0u32, cur_cols as u32, dev)?
+        .unsqueeze(0)?
+        .broadcast_as((rows, cur_cols))?
+        .contiguous()?;
+
+    while cur_cols > MAX_SINGLE_PASS {
+        let n_full = cur_cols / SAFE_SORT_TILE;
+        let rem = cur_cols % SAFE_SORT_TILE;
+        let full_w = n_full * SAFE_SORT_TILE;
+        let full_s = cur_scores
+            .narrow(1, 0, full_w)?
+            .contiguous()?
+            .reshape((rows * n_full, SAFE_SORT_TILE))?;
+        let full_i = cur_idx
+            .narrow(1, 0, full_w)?
+            .contiguous()?
+            .reshape((rows * n_full, SAFE_SORT_TILE))?;
+        let local_k = full_s
+            .arg_sort_last_dim(false)?
+            .narrow(1, 0, k)?
+            .contiguous()?;
+        let best_s = full_s.gather(&local_k, 1)?.reshape((rows, n_full * k))?;
+        let best_i = full_i.gather(&local_k, 1)?.reshape((rows, n_full * k))?;
+
+        if rem > 0 {
+            let tail_s = cur_scores.narrow(1, full_w, rem)?.contiguous()?;
+            let tail_i = cur_idx.narrow(1, full_w, rem)?.contiguous()?;
+            let t_take = k.min(rem);
+            let tail_k = tail_s
+                .arg_sort_last_dim(false)?
+                .narrow(1, 0, t_take)?
+                .contiguous()?;
+            let ts = tail_s.gather(&tail_k, 1)?;
+            let ti = tail_i.gather(&tail_k, 1)?;
+            cur_scores = Tensor::cat(&[&best_s, &ts], 1)?;
+            cur_idx = Tensor::cat(&[&best_i, &ti], 1)?;
+        } else {
+            cur_scores = best_s;
+            cur_idx = best_i;
+        }
+        cur_cols = cur_scores.dim(1)?;
+    }
+
+    let final_k = cur_scores
+        .arg_sort_last_dim(false)?
+        .narrow(1, 0, k)?
+        .contiguous()?;
+    cur_idx.gather(&final_k, 1)
+}
+
 /// Expand selected bucket IDs into up to `top_k` long-range key indices outside sinks and local window.
 pub fn expand_buckets_single_query(
     selected_buckets: &[usize],
@@ -1783,283 +1963,399 @@ impl LsaGpuSessionCache {
         self.sink_bias = None;
     }
 
-    pub fn forward(
-        &mut self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        sdpa_params: &SdpaParams,
-    ) -> Result<Tensor> {
-        let (k, v) = (&rows(k)?, &rows(v)?);
-        let (_b_sz, h_q, t_q, d_h) = q.dims4()?;
-        let (_, h_kv, t_k, _) = k.dims4()?;
-        let d_v = v.dim(3)?;
-        let group_size = h_q / h_kv;
-        let dtype = q.dtype();
-        let device = q.device();
+    pub fn clustered_blocks(&self) -> usize {
+        self.clustered_blocks
+    }
+
+    /// Trim cached closed buckets/centroids back so only blocks strictly within `[0 .. keep_len)` remain.
+    pub fn truncate(&mut self, keep_len: usize) -> Result<()> {
+        let w = self.config.window_size.max(16);
+        let keep_blocks = keep_len / w;
+        if keep_blocks >= self.clustered_blocks {
+            return Ok(());
+        }
+        if keep_blocks == 0 {
+            self.reset();
+            return Ok(());
+        }
+        let bucket_size = self.config.bucket_size.max(1).min(w);
+        let buckets_per_block = (w / bucket_size).max(1);
+        let keep_m = keep_blocks * buckets_per_block;
+
+        if let Some(t) = self.closed_k_buckets.take() {
+            self.closed_k_buckets = Some(t.narrow(1, 0, keep_m)?.contiguous()?);
+        }
+        if let Some(t) = self.closed_v_buckets.take() {
+            self.closed_v_buckets = Some(t.narrow(1, 0, keep_m)?.contiguous()?);
+        }
+        if let Some(t) = self.centroids.take() {
+            self.centroids = Some(t.narrow(1, 0, keep_m)?.contiguous()?);
+        }
+        if let Some(t) = self.sink_bias.take() {
+            self.sink_bias = Some(t.narrow(0, 0, keep_m)?.contiguous()?);
+        }
+        self.clustered_blocks = keep_blocks;
+        Ok(())
+    }
+
+    /// Append one or more complete `window_size` blocks (`k_slice` / `v_slice` shaped
+    /// `[1, h_kv, new_blocks * w, d]`) into the GPU bucket & centroid cache.
+    fn append_closed_blocks_slice(&mut self, k_slice: &Tensor, v_slice: &Tensor) -> Result<()> {
+        let (_, h_kv, new_len, d_h) = k_slice.dims4()?;
+        let d_v = v_slice.dim(3)?;
+        let device = k_slice.device();
 
         let w = self.config.window_size.max(16);
         let bucket_size = self.config.bucket_size.max(1).min(w);
         let buckets_per_block = (w / bucket_size).max(1);
-        let total_closed = t_k / w;
+        let new_blocks = new_len / w;
+        if new_blocks == 0 {
+            return Ok(());
+        }
+        let new_m = new_blocks * buckets_per_block;
 
-        if total_closed > self.clustered_blocks {
-            let start_blk = self.clustered_blocks;
-            let new_blocks = total_closed - start_blk;
-            let start_pos = start_blk * w;
-            let new_len = new_blocks * w;
-            let new_m = new_blocks * buckets_per_block;
+        let k_new_buckets = k_slice
+            .contiguous()?
+            .reshape((h_kv, new_m, bucket_size * d_h))?;
+        let v_new_buckets = v_slice
+            .contiguous()?
+            .reshape((h_kv, new_m, bucket_size * d_v))?;
 
-            let k_slice = k.narrow(2, start_pos, new_len)?;
-            let v_slice = v.narrow(2, start_pos, new_len)?;
-            let k_new_buckets = k_slice
+        let k_free = position_free(k_slice, self.config.rotary_dim, self.config.rotary_layout)?;
+        let d_free = k_free.dim(3)?;
+        let c_raw = k_free
+            .reshape((1, h_kv, new_m, bucket_size, d_free))?
+            .sum(3)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((1, new_m, h_kv * d_free))?;
+        let c_norm = rownorm(&c_raw)?.contiguous()?;
+
+        self.closed_k_buckets = Some(match self.closed_k_buckets.take() {
+            Some(prev) => Tensor::cat(&[&prev, &k_new_buckets], 1)?,
+            None => k_new_buckets,
+        });
+        self.closed_v_buckets = Some(match self.closed_v_buckets.take() {
+            Some(prev) => Tensor::cat(&[&prev, &v_new_buckets], 1)?,
+            None => v_new_buckets,
+        });
+        self.centroids = Some(match self.centroids.take() {
+            Some(prev) => Tensor::cat(&[&prev, &c_norm], 1)?,
+            None => c_norm,
+        });
+
+        self.clustered_blocks += new_blocks;
+        let m_total = self.clustered_blocks * buckets_per_block;
+        let mut bias_vec = vec![0.0f32; m_total];
+        if !bias_vec.is_empty() {
+            bias_vec[0] = 1e4;
+        }
+        self.sink_bias = Some(Tensor::from_vec(bias_vec, (m_total,), device)?);
+        Ok(())
+    }
+
+    /// Attend `q_chunk` (`[1, h_q, q_len, d_h]` at positions `[abs_q_start .. abs_q_start + q_len)`)
+    /// using cached closed buckets covering `[0 .. win_start)` plus dense window `k_win`/`v_win`
+    /// (`[1, h_kv, win_len, d]` covering `[win_start .. abs_q_start + q_len)`).
+    ///
+    /// Performs exact per-query centroid selection across arbitrary `q_len` (including `8`- and
+    /// `16`-token speculative verification blocks) with causal masking over the dense local tail.
+    #[allow(clippy::too_many_arguments)]
+    fn attend_chunk(
+        &self,
+        q_chunk: &Tensor,
+        abs_q_start: usize,
+        k_win: &Tensor,
+        v_win: &Tensor,
+        win_start: usize,
+        sdpa_params: &SdpaParams,
+    ) -> Result<Tensor> {
+        let (_, h_q, q_len, d_h) = q_chunk.dims4()?;
+        let (_, h_kv, win_len, _) = k_win.dims4()?;
+        let d_v = v_win.dim(3)?;
+        let group_size = h_q / h_kv;
+        let dtype = q_chunk.dtype();
+        let device = q_chunk.device();
+
+        let w = self.config.window_size.max(16);
+        let bucket_size = self.config.bucket_size.max(1).min(w);
+        let buckets_per_block = (w / bucket_size).max(1);
+        let valid_blocks = (win_start / w).min(self.clustered_blocks);
+        let valid_m = valid_blocks * buckets_per_block;
+        let abs_q_end = abs_q_start + q_len;
+
+        let (eff_p, eff_k) = budget_at(
+            abs_q_end.saturating_sub(1),
+            self.config.top_p,
+            self.config.top_k,
+            self.config.early_budget,
+        );
+        let max_buckets_by_k = (eff_k / bucket_size).max(1);
+        let take = eff_p.min(max_buckets_by_k).min(valid_m);
+
+        // No closed prefix blocks before `win_start` (or all buckets fit cleanly in full dense prefix).
+        if valid_m == 0
+            || take >= valid_m
+            || (valid_m > 0 && take == 0 && self.config.sink_size == 0)
+        {
+            let (k_cat, v_cat, q_off) = if valid_m == 0 {
+                (k_win.clone(), v_win.clone(), abs_q_start - win_start)
+            } else {
+                let prefix_len = valid_m * bucket_size;
+                let k_pre = self
+                    .closed_k_buckets
+                    .as_ref()
+                    .unwrap()
+                    .narrow(1, 0, valid_m)?
+                    .contiguous()?
+                    .reshape((1, h_kv, prefix_len, d_h))?;
+                let v_pre = self
+                    .closed_v_buckets
+                    .as_ref()
+                    .unwrap()
+                    .narrow(1, 0, valid_m)?
+                    .contiguous()?
+                    .reshape((1, h_kv, prefix_len, d_v))?;
+                (
+                    Tensor::cat(&[&k_pre, k_win], 2)?,
+                    Tensor::cat(&[&v_pre, v_win], 2)?,
+                    abs_q_start,
+                )
+            };
+            let kv_len = k_cat.dim(2)?;
+            let q_g = q_chunk
                 .contiguous()?
-                .reshape((h_kv, new_m, bucket_size * d_h))?;
-            let v_new_buckets = v_slice
-                .contiguous()?
-                .reshape((h_kv, new_m, bucket_size * d_v))?;
-
-            let k_free =
-                position_free(&k_slice, self.config.rotary_dim, self.config.rotary_layout)?;
-            let d_free = k_free.dim(3)?;
-            let c_raw = k_free
-                .reshape((1, h_kv, new_m, bucket_size, d_free))?
-                .sum(3)?
-                .transpose(1, 2)?
-                .contiguous()?
-                .reshape((1, new_m, h_kv * d_free))?;
-            let c_norm = rownorm(&c_raw)?.contiguous()?;
-
-            self.closed_k_buckets = Some(match self.closed_k_buckets.take() {
-                Some(prev) => Tensor::cat(&[&prev, &k_new_buckets], 1)?,
-                None => k_new_buckets,
-            });
-            self.closed_v_buckets = Some(match self.closed_v_buckets.take() {
-                Some(prev) => Tensor::cat(&[&prev, &v_new_buckets], 1)?,
-                None => v_new_buckets,
-            });
-            self.centroids = Some(match self.centroids.take() {
-                Some(prev) => Tensor::cat(&[&prev, &c_norm], 1)?,
-                None => c_norm,
-            });
-
-            let m_total = total_closed * buckets_per_block;
-            let mut bias_vec = vec![0.0f32; m_total];
-            if !bias_vec.is_empty() {
-                bias_vec[0] = 1e4;
+                .reshape((1, h_kv, group_size * q_len, d_h))?;
+            let mut att =
+                MatMul.matmul_affine_mul(&q_g, &k_cat.t()?, sdpa_params.softmax_scale.into())?;
+            if let Some(softcap) = sdpa_params.softcap {
+                att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
             }
-            self.sink_bias = Some(Tensor::from_vec(bias_vec, (m_total,), device)?);
-            self.clustered_blocks = total_closed;
+            let att_f32 = att.reshape((1, h_q, q_len, kv_len))?.to_dtype(DType::F32)?;
+            let att_masked = if q_len > 1 || kv_len > q_off + 1 {
+                let mask = get_cached_causal_mask(device, q_len, kv_len, q_off)?;
+                att_f32.broadcast_add(&mask)?
+            } else {
+                att_f32
+            };
+            let probs = hanzo_nn::ops::softmax_last_dim(&att_masked)?
+                .to_dtype(dtype)?
+                .reshape((1, h_kv, group_size * q_len, kv_len))?;
+            return MatMul.matmul(&probs, &v_cat)?.reshape((1, h_q, q_len, d_v));
         }
 
-        let m_total = self.clustered_blocks * buckets_per_block;
-        let closed_len = self.clustered_blocks * w;
+        let take = take.max(1).min(valid_m);
+        let m_long = take * bucket_size;
+        let c_valid_t = self
+            .centroids
+            .as_ref()
+            .unwrap()
+            .narrow(1, 0, valid_m)?
+            .squeeze(0)?
+            .t()?;
+        let b_valid = self.sink_bias.as_ref().unwrap().narrow(0, 0, valid_m)?;
 
-        // Fast GPU single-query decode (`t_q == 1`): zero CPU syncs, zero repeat_kv!
-        if t_q == 1 {
-            let pos = t_k.saturating_sub(1);
-            let (eff_p, eff_k) = budget_at(
-                pos,
-                self.config.top_p,
-                self.config.top_k,
-                self.config.early_budget,
-            );
-            let max_buckets_by_k = (eff_k / bucket_size).max(1);
-            let take = eff_p.min(max_buckets_by_k).min(m_total);
-            let tail_len = t_k.saturating_sub(closed_len);
-            let q_g = q.reshape((1, h_kv, group_size, d_h))?;
+        // Bound temporary `[h_kv * sub_q, m_long, d]` gather buffers (~64 MiB combined K+V target).
+        let elem_per_tok = (h_kv * m_long.max(1) * d_h.max(d_v)).max(1);
+        let sub_step = (16 * 1024 * 1024 / elem_per_tok).clamp(1, 64);
 
-            if take > 0 && take < m_total {
-                let q_free = position_free(q, self.config.rotary_dim, self.config.rotary_layout)?;
-                let d_free = q_free.dim(3)?;
-                let q_vec = q_free
-                    .reshape((1, h_kv, group_size, d_free))?
-                    .sum(2)?
-                    .reshape((1, 1, h_kv * d_free))?;
-                let scores = MatMul
-                    .matmul(&q_vec, &self.centroids.as_ref().unwrap().t()?)?
-                    .reshape((m_total,))?
-                    .to_dtype(DType::F32)?
-                    .add(self.sink_bias.as_ref().unwrap())?;
-                let top_buckets = scores
-                    .arg_sort_last_dim(false)?
-                    .narrow(0, 0, take)?
-                    .contiguous()?;
-                let m_long = take * bucket_size;
+        let mut sub_outputs = Vec::with_capacity(q_len.div_ceil(sub_step));
+        for sub_start in (0..q_len).step_by(sub_step) {
+            let sub_q = sub_step.min(q_len - sub_start);
+            let q_sub = q_chunk.narrow(2, sub_start, sub_q)?;
+            let sub_abs_start = abs_q_start + sub_start;
+            let sub_win_len = (sub_abs_start + sub_q - win_start).min(win_len);
+            let k_win_sub = k_win.narrow(2, 0, sub_win_len)?;
+            let v_win_sub = v_win.narrow(2, 0, sub_win_len)?;
+
+            let q_free = position_free(&q_sub, self.config.rotary_dim, self.config.rotary_layout)?;
+            let d_free = q_free.dim(3)?;
+            let q_vecs = q_free
+                .squeeze(0)?
+                .reshape((h_kv, group_size, sub_q, d_free))?
+                .sum(1)?
+                .transpose(0, 1)?
+                .contiguous()?
+                .reshape((sub_q, h_kv * d_free))?;
+
+            let bucket_scores = MatMul
+                .matmul(&q_vecs, &c_valid_t)?
+                .to_dtype(DType::F32)?
+                .broadcast_add(&b_valid.unsqueeze(0)?)?;
+            let top_buckets = top_k_indices_last_dim(&bucket_scores, take)?;
+
+            let sub_out = if sub_q == 1 {
+                let idx = top_buckets.squeeze(0)?;
                 let k_long = self
                     .closed_k_buckets
                     .as_ref()
                     .unwrap()
-                    .index_select(&top_buckets, 1)?
+                    .index_select(&idx, 1)?
                     .reshape((1, h_kv, m_long, d_h))?;
                 let v_long = self
                     .closed_v_buckets
                     .as_ref()
                     .unwrap()
-                    .index_select(&top_buckets, 1)?
+                    .index_select(&idx, 1)?
                     .reshape((1, h_kv, m_long, d_v))?;
 
+                let q_g = q_sub.contiguous()?.reshape((1, h_kv, group_size, d_h))?;
                 let att_long = MatMul.matmul_affine_mul(
                     &q_g,
                     &k_long.t()?,
                     sdpa_params.softmax_scale.into(),
                 )?;
-                if tail_len > 0 {
-                    let k_win = k.narrow(2, closed_len, tail_len)?;
-                    let v_win = v.narrow(2, closed_len, tail_len)?;
-                    let att_win = MatMul.matmul_affine_mul(
-                        &q_g,
-                        &k_win.t()?,
-                        sdpa_params.softmax_scale.into(),
-                    )?;
-                    let mut att = Tensor::cat(&[&att_long, &att_win], 3)?;
-                    if let Some(softcap) = sdpa_params.softcap {
-                        att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
-                    }
-                    let probs = hanzo_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
-                        .to_dtype(dtype)?;
-                    let p_long = probs.narrow(3, 0, m_long)?.contiguous()?;
-                    let p_win = probs.narrow(3, m_long, tail_len)?.contiguous()?;
-                    let out =
-                        (MatMul.matmul(&p_long, &v_long)? + MatMul.matmul(&p_win, &v_win)?)?;
-                    return out.reshape((1, h_q, 1, d_v));
-                } else {
-                    let mut att = att_long;
-                    if let Some(softcap) = sdpa_params.softcap {
-                        att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
-                    }
-                    let probs = hanzo_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
-                        .to_dtype(dtype)?;
-                    return MatMul.matmul(&probs, &v_long)?.reshape((1, h_q, 1, d_v));
+                let att_win = MatMul.matmul_affine_mul(
+                    &q_g,
+                    &k_win_sub.t()?,
+                    sdpa_params.softmax_scale.into(),
+                )?;
+                let mut att = Tensor::cat(&[&att_long, &att_win], 3)?;
+                if let Some(softcap) = sdpa_params.softcap {
+                    att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
                 }
-            }
-
-            let mut att =
-                MatMul.matmul_affine_mul(&q_g, &k.t()?, sdpa_params.softmax_scale.into())?;
-            if let Some(softcap) = sdpa_params.softcap {
-                att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
-            }
-            let probs =
-                hanzo_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
-            return MatMul.matmul(&probs, v)?.reshape((1, h_q, 1, d_v));
-        }
-
-        // Fast GPU block-sparse prefill (`t_q > 1`): zero CPU syncs, causal prefix + sparse gather!
-        let query_offset = t_k.saturating_sub(t_q);
-        let mut chunks_out = Vec::with_capacity(t_q.div_ceil(w));
-
-        for q_start in (0..t_q).step_by(w) {
-            let q_len = w.min(t_q - q_start);
-            let abs_q_start = query_offset + q_start;
-            let abs_q_end = abs_q_start + q_len;
-            let win_start = (abs_q_start.saturating_sub(w) / w) * w;
-            let valid_blocks = (win_start / w).min(self.clustered_blocks);
-            let valid_m = valid_blocks * buckets_per_block;
-
-            let (eff_p, eff_k) = budget_at(
-                abs_q_end.saturating_sub(1),
-                self.config.top_p,
-                self.config.top_k,
-                self.config.early_budget,
-            );
-            let max_buckets_by_k = (eff_k / bucket_size).max(1);
-            let take = eff_p.min(max_buckets_by_k).min(valid_m);
-
-            let q_chunk = q.narrow(2, q_start, q_len)?;
-            let q_g = q_chunk
-                .contiguous()?
-                .reshape((1, h_kv, group_size * q_len, d_h))?;
-
-            if take > 0 && take < valid_m {
-                let q_free =
-                    position_free(&q_chunk, self.config.rotary_dim, self.config.rotary_layout)?;
-                let d_free = q_free.dim(3)?;
-                let q_vec = q_free
-                    .sum(2)?
-                    .reshape((1, h_kv, group_size, d_free))?
-                    .sum(2)?
-                    .reshape((1, 1, h_kv * d_free))?;
-                let c_valid = self
-                    .centroids
-                    .as_ref()
-                    .unwrap()
-                    .narrow(1, 0, valid_m)?
-                    .t()?;
-                let b_valid = self.sink_bias.as_ref().unwrap().narrow(0, 0, valid_m)?;
-                let scores = MatMul
-                    .matmul(&q_vec, &c_valid)?
-                    .reshape((valid_m,))?
-                    .to_dtype(DType::F32)?
-                    .add(&b_valid)?;
-                let top_buckets = scores
-                    .arg_sort_last_dim(false)?
-                    .narrow(0, 0, take)?
-                    .contiguous()?;
-                let m_long = take * bucket_size;
+                let att_f32 = att
+                    .reshape((1, h_q, 1, m_long + sub_win_len))?
+                    .to_dtype(DType::F32)?;
+                let probs = hanzo_nn::ops::softmax_last_dim(&att_f32)?
+                    .to_dtype(dtype)?
+                    .reshape((1, h_kv, group_size, m_long + sub_win_len))?;
+                let p_long = probs.narrow(3, 0, m_long)?.contiguous()?;
+                let p_win = probs.narrow(3, m_long, sub_win_len)?.contiguous()?;
+                (MatMul.matmul(&p_long, &v_long)? + MatMul.matmul(&p_win, &v_win_sub)?)?
+                    .reshape((1, h_q, 1, d_v))?
+            } else {
+                let flat_idx = top_buckets.reshape((sub_q * take,))?;
                 let k_long = self
                     .closed_k_buckets
                     .as_ref()
                     .unwrap()
-                    .index_select(&top_buckets, 1)?
-                    .reshape((1, h_kv, m_long, d_h))?;
+                    .index_select(&flat_idx, 1)?
+                    .reshape((h_kv, sub_q, m_long, d_h))?
+                    .reshape((h_kv * sub_q, m_long, d_h))?;
                 let v_long = self
                     .closed_v_buckets
                     .as_ref()
                     .unwrap()
-                    .index_select(&top_buckets, 1)?
-                    .reshape((1, h_kv, m_long, d_v))?;
+                    .index_select(&flat_idx, 1)?
+                    .reshape((h_kv, sub_q, m_long, d_v))?
+                    .reshape((h_kv * sub_q, m_long, d_v))?;
 
+                let q_g_tok = q_sub
+                    .squeeze(0)?
+                    .reshape((h_kv, group_size, sub_q, d_h))?
+                    .transpose(1, 2)?
+                    .contiguous()?
+                    .reshape((h_kv * sub_q, group_size, d_h))?;
                 let att_long = MatMul
-                    .matmul_affine_mul(&q_g, &k_long.t()?, sdpa_params.softmax_scale.into())?
-                    .reshape((1, h_q, q_len, m_long))?
+                    .matmul_affine_mul(&q_g_tok, &k_long.t()?, sdpa_params.softmax_scale.into())?
+                    .reshape((h_kv, sub_q, group_size, m_long))?
+                    .transpose(1, 2)?
+                    .reshape((1, h_q, sub_q, m_long))?
                     .to_dtype(DType::F32)?;
 
-                let win_len = abs_q_end - win_start;
-                let k_win = k.narrow(2, win_start, win_len)?;
-                let v_win = v.narrow(2, win_start, win_len)?;
+                let q_g_win = q_sub
+                    .contiguous()?
+                    .reshape((1, h_kv, group_size * sub_q, d_h))?;
                 let att_win = MatMul
-                    .matmul_affine_mul(&q_g, &k_win.t()?, sdpa_params.softmax_scale.into())?
-                    .reshape((1, h_q, q_len, win_len))?
+                    .matmul_affine_mul(&q_g_win, &k_win_sub.t()?, sdpa_params.softmax_scale.into())?
+                    .reshape((1, h_q, sub_q, sub_win_len))?
                     .to_dtype(DType::F32)?;
-                let mask = get_cached_causal_mask(device, q_len, win_len, abs_q_start - win_start)?;
+                let mask =
+                    get_cached_causal_mask(device, sub_q, sub_win_len, sub_abs_start - win_start)?;
                 let att_win_masked = att_win.broadcast_add(&mask)?;
 
-                let att = Tensor::cat(&[&att_long, &att_win_masked], 3)?;
+                let mut att = Tensor::cat(&[&att_long, &att_win_masked], 3)?;
+                if let Some(softcap) = sdpa_params.softcap {
+                    att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
+                }
                 let probs = hanzo_nn::ops::softmax_last_dim(&att)?.to_dtype(dtype)?;
-                let p_long = probs.narrow(3, 0, m_long)?.contiguous()?.reshape((
-                    1,
-                    h_kv,
-                    group_size * q_len,
-                    m_long,
-                ))?;
-                let p_win = probs.narrow(3, m_long, win_len)?.contiguous()?.reshape((
-                    1,
-                    h_kv,
-                    group_size * q_len,
-                    win_len,
-                ))?;
-                let out_chunk = (MatMul.matmul(&p_long, &v_long)?
-                    + MatMul.matmul(&p_win, &v_win)?)?
-                .reshape((1, h_q, q_len, d_v))?;
-                chunks_out.push(out_chunk);
-            } else {
-                let kv_len = abs_q_end;
-                let k_prefix = k.narrow(2, 0, kv_len)?;
-                let v_prefix = v.narrow(2, 0, kv_len)?;
-                let att = MatMul
-                    .matmul_affine_mul(&q_g, &k_prefix.t()?, sdpa_params.softmax_scale.into())?
-                    .reshape((1, h_q, q_len, kv_len))?
-                    .to_dtype(DType::F32)?;
-                let mask = get_cached_causal_mask(device, q_len, kv_len, abs_q_start)?;
-                let att_masked = att.broadcast_add(&mask)?;
-                let probs = hanzo_nn::ops::softmax_last_dim(&att_masked)?
-                    .to_dtype(dtype)?
-                    .reshape((1, h_kv, group_size * q_len, kv_len))?;
-                let out_chunk = MatMul
-                    .matmul(&probs, &v_prefix)?
-                    .reshape((1, h_q, q_len, d_v))?;
-                chunks_out.push(out_chunk);
+                let p_long = probs
+                    .narrow(3, 0, m_long)?
+                    .contiguous()?
+                    .reshape((h_kv, group_size, sub_q, m_long))?
+                    .transpose(1, 2)?
+                    .contiguous()?
+                    .reshape((h_kv * sub_q, group_size, m_long))?;
+                let p_win = probs
+                    .narrow(3, m_long, sub_win_len)?
+                    .contiguous()?
+                    .reshape((1, h_kv, group_size * sub_q, sub_win_len))?;
+
+                let out_long = MatMul
+                    .matmul(&p_long, &v_long)?
+                    .reshape((h_kv, sub_q, group_size, d_v))?
+                    .transpose(1, 2)?
+                    .reshape((1, h_q, sub_q, d_v))?;
+                let out_win = MatMul
+                    .matmul(&p_win, &v_win_sub)?
+                    .reshape((1, h_q, sub_q, d_v))?;
+                (out_long + out_win)?
+            };
+            sub_outputs.push(sub_out);
+        }
+
+        if sub_outputs.len() == 1 {
+            Ok(sub_outputs.into_iter().next().unwrap())
+        } else {
+            let refs: Vec<&Tensor> = sub_outputs.iter().collect();
+            Tensor::cat(&refs, 2)
+        }
+    }
+
+    fn attend_range(
+        &self,
+        q: &Tensor,
+        q_offset: usize,
+        k_tail: &Tensor,
+        v_tail: &Tensor,
+        tail_start: usize,
+        sdpa_params: &SdpaParams,
+    ) -> Result<Tensor> {
+        let (_, _, t_q, _) = q.dims4()?;
+        let tail_len = k_tail.dim(2)?;
+        let w = self.config.window_size.max(16);
+        let early_pos = self.config.early_budget.map(|eb| eb.position);
+
+        let mut chunks_out = Vec::with_capacity(t_q.div_ceil(w) + 1);
+        let mut q_start = 0usize;
+        while q_start < t_q {
+            let abs_q_start = q_offset + q_start;
+            let next_w = ((abs_q_start / w) + 1) * w;
+            let mut abs_split = (q_offset + t_q).min(next_w);
+            if let Some(ep) = early_pos {
+                if abs_q_start < ep && abs_split > ep {
+                    abs_split = ep;
+                }
             }
+            let q_len = abs_split - abs_q_start;
+            let win_start = (abs_q_start.saturating_sub(w) / w) * w;
+            let tail_off = win_start - tail_start;
+            let win_len = (abs_split - win_start).min(tail_len - tail_off);
+            let q_chunk = if q_start == 0 && q_len == t_q {
+                q.clone()
+            } else {
+                q.narrow(2, q_start, q_len)?
+            };
+            let k_win = if tail_off == 0 && win_len == tail_len {
+                k_tail.clone()
+            } else {
+                k_tail.narrow(2, tail_off, win_len)?
+            };
+            let v_win = if tail_off == 0 && win_len == tail_len {
+                v_tail.clone()
+            } else {
+                v_tail.narrow(2, tail_off, win_len)?
+            };
+            chunks_out.push(self.attend_chunk(
+                &q_chunk,
+                abs_q_start,
+                &k_win,
+                &v_win,
+                win_start,
+                sdpa_params,
+            )?);
+            q_start += q_len;
         }
 
         if chunks_out.len() == 1 {
@@ -2069,6 +2365,177 @@ impl LsaGpuSessionCache {
             Tensor::cat(&refs, 2)
         }
     }
+
+    pub fn forward(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        sdpa_params: &SdpaParams,
+    ) -> Result<Tensor> {
+        let (k, v) = (&rows(k)?, &rows(v)?);
+        let (_b_sz, _h_q, t_q, _d_h) = q.dims4()?;
+        let (_, _, t_k, _) = k.dims4()?;
+
+        let w = self.config.window_size.max(16);
+        let total_closed = t_k / w;
+
+        if total_closed > self.clustered_blocks {
+            let start_pos = self.clustered_blocks * w;
+            let new_len = (total_closed - self.clustered_blocks) * w;
+            let k_slice = k.narrow(2, start_pos, new_len)?;
+            let v_slice = v.narrow(2, start_pos, new_len)?;
+            self.append_closed_blocks_slice(&k_slice, &v_slice)?;
+        }
+
+        let query_offset = t_k.saturating_sub(t_q);
+        let min_win_start = (query_offset.saturating_sub(w) / w) * w;
+        let k_tail = k.narrow(2, min_win_start, t_k - min_win_start)?;
+        let v_tail = v.narrow(2, min_win_start, t_k - min_win_start)?;
+        self.attend_range(
+            q,
+            query_offset,
+            &k_tail,
+            &v_tail,
+            min_win_start,
+            sdpa_params,
+        )
+    }
+}
+
+/// Paged-KV descriptor for [`paged_lsa_sdpa`].
+pub struct PagedKvGather<'a> {
+    pub key_cache: &'a Tensor,
+    pub block_size: usize,
+    pub block_table: &'a [usize],
+    pub kv_len: usize,
+    pub q_offset: usize,
+    /// When true, blocks in `[0 .. kv_len / w]` may be closed into buckets immediately;
+    /// during speculative verification (`false`), only blocks wholly before `q_offset` close.
+    pub allow_tail_close: bool,
+}
+
+/// Record a speculative rollback for all cached layers belonging to `block_0`.
+///
+/// The actual tensor truncation runs on the attention thread via [`drain_paged_lsa_ops`]
+/// before the next read so device buffers are never released off-context.
+pub(crate) fn rollback_paged_lsa(block_0: usize, keep_len: usize) {
+    if let Ok(mut q) = pending_paged_ops().lock() {
+        q.push(PendingPagedOp::Rollback { block_0, keep_len });
+    }
+}
+
+/// Evict all cached Paged-LSA layer sessions anchored at physical block `block_0`.
+pub(crate) fn evict_paged_lsa(block_0: usize) {
+    if let Ok(mut q) = pending_paged_ops().lock() {
+        q.push(PendingPagedOp::Evict { block_0 });
+    }
+}
+
+/// Canonical Paged-LSA attention shared by paged decode, speculative block verification,
+/// and paged prefill/continuation.
+///
+/// `gather_range(start_tok, end_tok)` returns contiguous `(k, v)` shaped `[1, h_kv, end_tok - start_tok, d]`,
+/// touching ONLY newly closed `w`-blocks and the trailing active window rather than the full prefix.
+pub fn paged_lsa_sdpa<F>(
+    q: &Tensor,
+    ctx: &PagedKvGather<'_>,
+    mut gather_range: F,
+    sdpa_params: &SdpaParams,
+    lsa_cfg: &LsaConfig,
+) -> Result<Tensor>
+where
+    F: FnMut(usize, usize) -> Result<(Tensor, Tensor)>,
+{
+    DISPATCHES.fetch_add(1, Ordering::Relaxed);
+    settle();
+
+    let (_, _, _t_q, _) = q.dims4()?;
+    if ctx.block_table.is_empty() || ctx.kv_len == 0 || ctx.block_size == 0 {
+        hanzo_ml::bail!("paged_lsa_sdpa called with empty block_table or kv_len");
+    }
+
+    let w = lsa_cfg.window_size.max(16);
+    let cluster_upto = if ctx.allow_tail_close {
+        ctx.kv_len
+    } else {
+        ctx.q_offset
+    };
+    let target_closed = cluster_upto / w;
+
+    let layer_key = tensor_storage_key(ctx.key_cache);
+    let block_0 = ctx.block_table[0];
+    let generation = GENERATION.load(Ordering::Acquire);
+    let now = SESSION_CALLS.fetch_add(1, Ordering::Relaxed);
+
+    let mut pool = global_paged_session_pool()
+        .write()
+        .map_err(|_| Error::Msg("paged LSA session pool poisoned".into()))?;
+    pool.retain(|_, e| now.saturating_sub(e.used) <= SESSION_IDLE_CALLS);
+
+    let entry = pool
+        .entry((layer_key, block_0))
+        .or_insert_with(|| PagedLsaEntry {
+            session: LsaGpuSessionCache::new(lsa_cfg.clone()),
+            block_ids: Vec::new(),
+            _source: ctx.key_cache.clone(),
+            generation,
+            used: now,
+        });
+    entry._source = ctx.key_cache.clone();
+    entry.used = now;
+
+    if entry.session.config != *lsa_cfg || entry.generation != generation {
+        entry.session.config = lsa_cfg.clone();
+        entry.session.reset();
+        entry.block_ids.clear();
+        entry.generation = generation;
+    }
+
+    // Reconcile prefix physical block identity in case prefix blocks were evicted/reallocated
+    // or an earlier truncation trimmed `clustered_blocks` behind `entry.block_ids`.
+    let cached_kv_blocks = (entry.session.clustered_blocks * w).div_ceil(ctx.block_size);
+    entry.block_ids.truncate(cached_kv_blocks);
+    let common_kv_blocks = entry
+        .block_ids
+        .iter()
+        .zip(ctx.block_table.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let max_valid_tokens = (common_kv_blocks * ctx.block_size).min(cluster_upto);
+    if max_valid_tokens / w < entry.session.clustered_blocks {
+        entry.session.truncate(max_valid_tokens)?;
+        let synced_kv_blocks = (entry.session.clustered_blocks * w).div_ceil(ctx.block_size);
+        entry.block_ids.truncate(synced_kv_blocks);
+    }
+
+    // Incrementally gather & cluster only newly confirmed closed blocks.
+    if target_closed > entry.session.clustered_blocks {
+        let start_tok = entry.session.clustered_blocks * w;
+        let end_tok = target_closed * w;
+        let (k_new, v_new) = gather_range(start_tok, end_tok)?;
+        let (k_new, v_new) = (rows(&k_new)?, rows(&v_new)?);
+        entry.session.append_closed_blocks_slice(&k_new, &v_new)?;
+        let needed_kv_blocks = end_tok.div_ceil(ctx.block_size).min(ctx.block_table.len());
+        entry.block_ids.clear();
+        entry
+            .block_ids
+            .extend_from_slice(&ctx.block_table[..needed_kv_blocks]);
+    }
+
+    // Gather `[min_win_start .. kv_len)` once and split on W-block boundaries so multi-query
+    // verify or continuation crossing a W boundary uses each query block's exact closed prefix.
+    let min_win_start = (ctx.q_offset.saturating_sub(w) / w) * w;
+    let (k_tail, v_tail) = gather_range(min_win_start, ctx.kv_len)?;
+    let (k_tail, v_tail) = (rows(&k_tail)?, rows(&v_tail)?);
+    entry.session.attend_range(
+        q,
+        ctx.q_offset,
+        &k_tail,
+        &v_tail,
+        min_win_start,
+        sdpa_params,
+    )
 }
 
 /// Run Latent Sparse Attention on `q` (`[B, Hq, Tq, Dh]`), `k` (`[B, Hkv, Tk, Dh]`), `v` (`[B, Hkv, Tk, Dv]`).
@@ -2103,14 +2570,12 @@ pub fn lsa_sdpa(
                     &mut scratch
                 }
             };
-            // This call writes positions `t_k - t_q..t_k`; a block that reaches into them
-            // was clustered from keys that are not there any more (a fresh prompt, a reused
-            // prefix with a new suffix), so only blocks wholly before them survive.
-            let w = lsa_cfg.window_size.max(16);
-            if session.config != *lsa_cfg || t_k.saturating_sub(t_q) / w < session.clustered_blocks
-            {
+            // Truncate back to blocks wholly before `[t_k - t_q .. t_k)` if keys were rewritten/rolled back.
+            if session.config != *lsa_cfg {
                 session.config = lsa_cfg.clone();
                 session.reset();
+            } else {
+                session.truncate(t_k.saturating_sub(t_q))?;
             }
             return session.forward(q, k, v, sdpa_params);
         }
@@ -2271,7 +2736,7 @@ impl LsaSessionCache {
             if let Some(prev) = self.index_keys.take() {
                 pieces.push(prev);
             }
-            pieces.extend(self.unclustered_tail.drain(..));
+            pieces.append(&mut self.unclustered_tail);
             let piece_refs: Vec<&Tensor> = pieces.iter().collect();
             let all_keys = if piece_refs.len() == 1 {
                 pieces.into_iter().next().unwrap()
@@ -2814,6 +3279,342 @@ mod tests {
         LsaConfig::clear();
         assert!(LsaConfig::global().is_none());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_paged_lsa_multi_query_verify_and_rollback() -> Result<()> {
+        #[allow(unused_mut)]
+        let mut devices = vec![Device::Cpu];
+        #[cfg(feature = "cuda")]
+        if let Ok(cuda_dev) = Device::new_cuda(0) {
+            devices.push(cuda_dev);
+        }
+        for device in devices {
+            run_paged_lsa_multi_query_verify_and_rollback(&device)?;
+        }
+        Ok(())
+    }
+
+    fn run_paged_lsa_multi_query_verify_and_rollback(device: &Device) -> Result<()> {
+        let device = device.clone();
+        let (b, h_q, h_kv, d_h) = (1, 4, 2, 16);
+        let sdpa_params = SdpaParams {
+            n_kv_groups: h_q / h_kv,
+            softcap: None,
+            softmax_scale: 1.0 / (d_h as f32).sqrt(),
+            sliding_window: None,
+            sinks: None,
+        };
+
+        // Helper storing full [1, h_kv, t, d_h] sequence inside a mock page table (`block_size = 16`).
+        let block_size = 16usize;
+        let total_max = 192usize;
+        let prefill_len = 136usize;
+        let q_full = det_tensor((b, h_q, total_max, d_h), 101, &device)?;
+        let k_a = det_tensor((b, h_kv, total_max, d_h), 202, &device)?;
+        let v_a = det_tensor((b, h_kv, total_max, d_h), 303, &device)?;
+        let k_b = det_tensor((b, h_kv, total_max, d_h), 404, &device)?;
+        let v_b = det_tensor((b, h_kv, total_max, d_h), 505, &device)?;
+
+        // Unique non-zero physical block IDs per run so the global paged session pool never collides.
+        let run_paged_step = |tag_base: usize,
+                              key_cache_id: &Tensor,
+                              k_src: &Tensor,
+                              v_src: &Tensor,
+                              q_start: usize,
+                              q_len: usize,
+                              allow_tail_close: bool,
+                              cfg: &LsaConfig|
+         -> Result<Tensor> {
+            let kv_len = q_start + q_len;
+            let num_blks = kv_len.div_ceil(block_size);
+            let block_table: Vec<usize> = (0..num_blks).map(|i| tag_base + i).collect();
+            let q_chunk = q_full.narrow(2, q_start, q_len)?;
+            paged_lsa_sdpa(
+                &q_chunk,
+                &PagedKvGather {
+                    key_cache: key_cache_id,
+                    block_size,
+                    block_table: &block_table,
+                    kv_len,
+                    q_offset: q_start,
+                    allow_tail_close,
+                },
+                |s, e| Ok((k_src.narrow(2, s, e - s)?, v_src.narrow(2, s, e - s)?)),
+                &sdpa_params,
+                cfg,
+            )
+        };
+
+        // 1. Full-budget multi-query speculative verify (q_len = 16) must match exact causal eager SDPA.
+        let full_cfg = LsaConfig {
+            window_size: 32,
+            sink_size: 4,
+            top_k: 512,
+            top_p: 128,
+            pool_size: 2,
+            bucket_size: 4,
+            bucket_cap: 8,
+            ..Default::default()
+        };
+        let layer_full = Tensor::zeros((1,), DType::F32, &device)?;
+        let _ = run_paged_step(
+            10_000,
+            &layer_full,
+            &k_a,
+            &v_a,
+            0,
+            prefill_len,
+            true,
+            &full_cfg,
+        )?;
+        let paged_verify_16 = run_paged_step(
+            10_000,
+            &layer_full,
+            &k_a,
+            &v_a,
+            prefill_len,
+            16,
+            false,
+            &full_cfg,
+        )?;
+
+        let kv_end = prefill_len + 16;
+        let mut mask = vec![0f32; 16 * kv_end];
+        for i in 0..16 {
+            for j in (prefill_len + i + 1)..kv_end {
+                mask[i * kv_end + j] = f32::NEG_INFINITY;
+            }
+        }
+        let mask_t = Tensor::from_vec(mask, (1, 1, 16, kv_end), &device)?;
+        let eager_verify_16 = naive_sdpa(
+            &q_full.narrow(2, prefill_len, 16)?,
+            &repeat_kv(k_a.narrow(2, 0, kv_end)?, sdpa_params.n_kv_groups)?,
+            &repeat_kv(v_a.narrow(2, 0, kv_end)?, sdpa_params.n_kv_groups)?,
+            Some(&mask_t),
+            &sdpa_params,
+        )?;
+        let verify_diff = paged_verify_16
+            .sub(&eager_verify_16)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            verify_diff < 1e-4,
+            "16-token Paged-LSA verify diverged from eager causal attention: max diff {verify_diff}"
+        );
+        evict_paged_lsa(10_000);
+
+        // 2. Sparse speculative verify (q_len = 8 and q_len = 16) + partial-block / cross-W-block rollback
+        // must discard rejected draft KV and match a clean session bit-identically (within f32 eps).
+        let sparse_cfg = LsaConfig {
+            window_size: 32,
+            sink_size: 4,
+            top_k: 16,
+            top_p: 4,
+            pool_size: 2,
+            bucket_size: 4,
+            bucket_cap: 8,
+            top_level: 1,
+            node_bucket_size: 2,
+            node_cluster_block_size: 8,
+            beam_width: 4,
+            start_nodes: 8,
+            bucket_shape: Some((2, 1.5)),
+            ..Default::default()
+        };
+
+        // Speculative session (base block 20_000): prefill 136, verify 16 draft tokens (up to 152, partial W-block),
+        // accept up to keep_len = 142, rollback, extend & close to 176, rollback across W-boundary to 150,
+        // overwrite divergent tail [142..158] / [150..166] with B keys/values.
+        let layer_spec = Tensor::zeros((1,), DType::F32, &device)?;
+        let k_keep_142 = Tensor::cat(
+            &[k_a.narrow(2, 0, 142)?, k_b.narrow(2, 142, total_max - 142)?],
+            2,
+        )?;
+        let v_keep_142 = Tensor::cat(
+            &[v_a.narrow(2, 0, 142)?, v_b.narrow(2, 142, total_max - 142)?],
+            2,
+        )?;
+
+        // Pollute draft range 136..168 with k_a/v_a
+        let _ = run_paged_step(
+            20_000,
+            &layer_spec,
+            &k_a,
+            &v_a,
+            0,
+            prefill_len,
+            true,
+            &sparse_cfg,
+        )?;
+        let _ = run_paged_step(
+            20_000,
+            &layer_spec,
+            &k_a,
+            &v_a,
+            prefill_len,
+            16,
+            false,
+            &sparse_cfg,
+        )?;
+        // Force closing block at 160 by verifying/decoding through 168
+        let _ = run_paged_step(20_000, &layer_spec, &k_a, &v_a, 152, 8, false, &sparse_cfg)?;
+        let _ = run_paged_step(20_000, &layer_spec, &k_a, &v_a, 160, 8, true, &sparse_cfg)?;
+
+        // Rollback across closed W-block [128..160) back to keep_len = 142, then verify 16 fresh tokens with k_keep_142.
+        rollback_paged_lsa(20_000, 142);
+        let spec_after_rb = run_paged_step(
+            20_000,
+            &layer_spec,
+            &k_keep_142,
+            &v_keep_142,
+            142,
+            16,
+            false,
+            &sparse_cfg,
+        )?;
+
+        // Clean reference session (base block 30_000) that never saw rejected draft tokens.
+        let layer_clean = Tensor::zeros((1,), DType::F32, &device)?;
+        let _ = run_paged_step(
+            30_000,
+            &layer_clean,
+            &k_keep_142,
+            &v_keep_142,
+            0,
+            142,
+            true,
+            &sparse_cfg,
+        )?;
+        let clean_ref = run_paged_step(
+            30_000,
+            &layer_clean,
+            &k_keep_142,
+            &v_keep_142,
+            142,
+            16,
+            false,
+            &sparse_cfg,
+        )?;
+
+        let rb_diff = spec_after_rb
+            .sub(&clean_ref)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            rb_diff < 1e-5,
+            "Paged-LSA speculative rollback across W-block/page boundary leaked stale KV: max diff {rb_diff}"
+        );
+        evict_paged_lsa(20_000);
+        evict_paged_lsa(30_000);
+
+        // 3. Multi-query verify (`allow_tail_close=false`) crossing a W-block boundary (`128..144`, W=32)
+        // must match token-by-token decode (`seq_len=1`, `allow_tail_close=true`) at every step.
+        let boundary_base = 40_000;
+        let boundary_ref = 50_000;
+        let layer_vb = Tensor::zeros((1,), DType::F32, &device)?;
+        let layer_db = Tensor::zeros((1,), DType::F32, &device)?;
+        let _ = run_paged_step(
+            boundary_base,
+            &layer_vb,
+            &k_a,
+            &v_a,
+            0,
+            120,
+            true,
+            &sparse_cfg,
+        )?;
+        let verify_cross = run_paged_step(
+            boundary_base,
+            &layer_vb,
+            &k_a,
+            &v_a,
+            120,
+            16,
+            false,
+            &sparse_cfg,
+        )?;
+
+        let _ = run_paged_step(
+            boundary_ref,
+            &layer_db,
+            &k_a,
+            &v_a,
+            0,
+            120,
+            true,
+            &sparse_cfg,
+        )?;
+        let mut step_outs = Vec::with_capacity(16);
+        for pos in 120..136 {
+            step_outs.push(run_paged_step(
+                boundary_ref,
+                &layer_db,
+                &k_a,
+                &v_a,
+                pos,
+                1,
+                true,
+                &sparse_cfg,
+            )?);
+        }
+        let step_refs: Vec<&Tensor> = step_outs.iter().collect();
+        let decode_cat = Tensor::cat(&step_refs, 2)?;
+        let cross_diff = verify_cross
+            .sub(&decode_cat)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            cross_diff < 1e-5,
+            "Paged-LSA verify crossing W-block boundary diverged from step-by-step decode: max diff {cross_diff}"
+        );
+        evict_paged_lsa(boundary_base);
+        evict_paged_lsa(boundary_ref);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_top_k_indices_last_dim_large_cols_parity() -> Result<()> {
+        #[allow(unused_mut)]
+        let mut devices = vec![Device::Cpu];
+        #[cfg(feature = "cuda")]
+        if let Ok(cuda_dev) = Device::new_cuda(0) {
+            devices.push(cuda_dev);
+        }
+
+        let rows = 4usize;
+        let k = 128usize;
+        for dev in devices {
+            for &cols in &[5000usize, 16_384, 16_517] {
+                // Inject distinct irrational-stepped scores so top-k indices have a unique exact order.
+                let mut host = Vec::with_capacity(rows * cols);
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let s = (((r * 131_071 + c * 265_443_5761) % 1_000_003) as f32) * 1e-3
+                            + (c as f32) * 1e-7;
+                        host.push(s);
+                    }
+                }
+                let scores = Tensor::from_vec(host.clone(), (rows, cols), &dev)?;
+                let got = top_k_indices_last_dim(&scores, k)?.to_vec2::<u32>()?;
+                for r in 0..rows {
+                    let row = &host[r * cols..(r + 1) * cols];
+                    let mut ref_order: Vec<usize> = (0..cols).collect();
+                    ref_order.sort_by(|&a, &b| row[b].total_cmp(&row[a]));
+                    let expected: Vec<u32> =
+                        ref_order.into_iter().take(k).map(|i| i as u32).collect();
+                    assert_eq!(
+                        got[r], expected,
+                        "top_k_indices_last_dim mismatch on {dev:?} for cols={cols} row={r}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

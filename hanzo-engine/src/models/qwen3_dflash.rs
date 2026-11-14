@@ -44,13 +44,14 @@
 //!   because that struct does kv-cache *self*-attention and cannot express
 //!   attention over a fixed fused memory concatenated with a bidirectional block.
 
+use hanzo_ml::quantized::gguf_file;
 use hanzo_ml::{DType, Device, Module, Result, Shape, Tensor, D};
 use hanzo_nn::Linear;
 use hanzo_quant::{ShardedSafeTensors, ShardedVarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::layers::{linear_no_bias, RmsNorm, RotaryEmbedding};
+use crate::layers::{linear_no_bias, RmsNorm, RotaryEmbedding, Yarn};
 use crate::speculative::{
     SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
     SpeculativeSharedHeads, TargetTokenEmbedder,
@@ -63,6 +64,16 @@ pub type TargetLmHead<'a> = dyn Fn(&Tensor) -> Result<Tensor> + 'a;
 #[derive(Debug, Clone, Deserialize)]
 pub struct RopeParameters {
     pub rope_theta: f64,
+    #[serde(default)]
+    pub rope_type: Option<String>,
+    #[serde(default)]
+    pub factor: Option<f64>,
+    #[serde(default)]
+    pub original_max_position_embeddings: Option<usize>,
+    #[serde(default)]
+    pub beta_fast: Option<f64>,
+    #[serde(default)]
+    pub beta_slow: Option<f64>,
 }
 
 /// The `dflash_config` block of the checkpoint `config.json` — everything that is
@@ -110,8 +121,153 @@ impl DFlash2Config {
         serde_json::from_str(&s).map_err(|e| hanzo_ml::Error::msg(e.to_string()))
     }
 
+    /// Parse DFlash 2 configuration from a GGUF file's metadata and tensor headers.
+    ///
+    /// Note that DFlash GGUFs store `dflash.target_layers` as 1-based layer indices
+    /// (e.g. `[6, 20, 34, 48, 62]` for 27B, `[2, 6, ...]` for 4B/9B), whereas
+    /// HuggingFace `config.json` and [`HiddenPrefixCapture`] use 0-based indices;
+    /// this converts them to 0-based on load.
+    pub fn from_gguf_content(content: &gguf_file::Content) -> Result<Self> {
+        let arch = gguf_meta_string(content, "general.architecture")?;
+        if arch != "dflash" {
+            hanzo_ml::bail!("expected GGUF general.architecture = \"dflash\", got \"{arch}\"");
+        }
+
+        let selector_rank = gguf_meta_usize(content, "dflash.selector_rank")?;
+        let pred_info = content
+            .tensor_infos
+            .get("selector_predecessor.weight")
+            .ok_or_else(|| {
+                hanzo_ml::Error::msg("GGUF missing tensor `selector_predecessor.weight`")
+            })?;
+        let pred_dims = pred_info.shape.dims();
+        if pred_dims.len() != 2 {
+            hanzo_ml::bail!(
+                "GGUF `selector_predecessor.weight` expected 2D shape, got {:?}",
+                pred_dims
+            );
+        }
+        let vocab_size = if pred_dims[1] == selector_rank {
+            pred_dims[0]
+        } else if pred_dims[0] == selector_rank {
+            pred_dims[1]
+        } else {
+            hanzo_ml::bail!(
+                "GGUF `selector_predecessor.weight` shape {:?} incompatible with selector_rank {selector_rank}",
+                pred_dims
+            );
+        };
+
+        let target_layers_1based = gguf_meta_usize_array(content, "dflash.target_layers")?;
+        let mut target_layer_ids = Vec::with_capacity(target_layers_1based.len());
+        for raw in target_layers_1based {
+            if raw == 0 {
+                hanzo_ml::bail!(
+                    "GGUF `dflash.target_layers` contains 0; expected 1-based layer IDs"
+                );
+            }
+            target_layer_ids.push((raw - 1) as i64);
+        }
+
+        let mask_token_id = gguf_meta_usize_opt(content, "dflash.mask_token_id")?
+            .or(gguf_meta_usize_opt(
+                content,
+                "tokenizer.ggml.mask_token_id",
+            )?)
+            .ok_or_else(|| {
+                hanzo_ml::Error::msg(
+                    "GGUF missing `dflash.mask_token_id` and `tokenizer.ggml.mask_token_id`",
+                )
+            })? as u32;
+
+        let sliding_window = gguf_meta_usize_opt(content, "dflash.attention.sliding_window")?;
+        let pattern = gguf_meta_bool_array_opt(content, "dflash.attention.sliding_window_pattern")?;
+        let num_hidden_layers = gguf_meta_usize(content, "dflash.block_count")?;
+        let (use_sliding_window, layer_types) = if let Some(pat) = pattern {
+            let any_sliding = pat.iter().any(|&b| b) && sliding_window.is_some();
+            let types = pat
+                .into_iter()
+                .map(|is_sliding| {
+                    if is_sliding {
+                        "sliding_attention".to_string()
+                    } else {
+                        "full_attention".to_string()
+                    }
+                })
+                .collect();
+            (any_sliding, types)
+        } else if sliding_window.is_some() {
+            (
+                true,
+                vec!["sliding_attention".to_string(); num_hidden_layers],
+            )
+        } else {
+            (false, Vec::new())
+        };
+
+        let rope_type = gguf_meta_string_opt(content, "dflash.rope.scaling.type")?;
+        let factor = gguf_meta_f64_opt(content, "dflash.rope.scaling.factor")?;
+        let original_max_position_embeddings =
+            gguf_meta_usize_opt(content, "dflash.rope.scaling.original_context_length")?;
+        let beta_fast = gguf_meta_f64_opt(content, "dflash.rope.scaling.beta_fast")?;
+        let beta_slow = gguf_meta_f64_opt(content, "dflash.rope.scaling.beta_slow")?;
+
+        Ok(Self {
+            vocab_size,
+            hidden_size: gguf_meta_usize(content, "dflash.embedding_length")?,
+            intermediate_size: gguf_meta_usize(content, "dflash.feed_forward_length")?,
+            num_hidden_layers,
+            num_attention_heads: gguf_meta_usize(content, "dflash.attention.head_count")?,
+            num_key_value_heads: gguf_meta_usize(content, "dflash.attention.head_count_kv")?,
+            head_dim: gguf_meta_usize(content, "dflash.attention.key_length")?,
+            rms_norm_eps: gguf_meta_f64_opt(content, "dflash.attention.layer_norm_rms_epsilon")?
+                .unwrap_or(1e-6),
+            max_position_embeddings: gguf_meta_usize(content, "dflash.context_length")?,
+            rope_parameters: RopeParameters {
+                rope_theta: gguf_meta_f64_opt(content, "dflash.rope.freq_base")?.unwrap_or(1e7),
+                rope_type,
+                factor,
+                original_max_position_embeddings,
+                beta_fast,
+                beta_slow,
+            },
+            dflash_config: DFlashParameters {
+                block_size: gguf_meta_usize(content, "dflash.block_size")?,
+                conv_group_size: gguf_meta_usize(content, "dflash.conv_group_size")?,
+                conv_kernel_size: gguf_meta_usize(content, "dflash.conv_kernel_size")?,
+                mask_token_id,
+                selector_rank,
+                selector_top_k: gguf_meta_usize(content, "dflash.selector_top_k")?,
+                target_layer_ids,
+            },
+            sliding_window,
+            use_sliding_window,
+            layer_types,
+        })
+    }
+
     pub fn rope_theta(&self) -> f64 {
         self.rope_parameters.rope_theta
+    }
+
+    pub fn yarn(&self) -> Result<Option<Yarn>> {
+        if self.rope_parameters.rope_type.as_deref() != Some("yarn") {
+            return Ok(None);
+        }
+        let factor = self.rope_parameters.factor.unwrap_or(1.0);
+        if factor <= 1.0 {
+            return Ok(None);
+        }
+        let original = self
+            .rope_parameters
+            .original_max_position_embeddings
+            .unwrap_or(self.max_position_embeddings);
+        Ok(Some(Yarn {
+            factor,
+            length: original.max(1),
+            beta_fast: self.rope_parameters.beta_fast.unwrap_or(32.0),
+            beta_slow: self.rope_parameters.beta_slow.unwrap_or(1.0),
+        }))
     }
 
     /// Number of fused target-layer hidden states (== `fc` input factor).
@@ -493,10 +649,11 @@ impl Qwen3DFlash2 {
         let norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("norm"))?;
         let selector = CandidateSelector::load(&cfg, vb.pp("candidate_selector"))?;
 
-        let rotary = RotaryEmbedding::new(
+        let rotary = RotaryEmbedding::new_yarn(
             cfg.rope_theta() as f32,
             cfg.head_dim,
             cfg.max_position_embeddings,
+            cfg.yarn()?,
             &device,
             true, // gpt-neox / rotate_half convention (Qwen3)
             dtype,
@@ -511,6 +668,286 @@ impl Qwen3DFlash2 {
             rotary,
             cfg,
             device,
+            dtype,
+        })
+    }
+
+    /// Load a DFlash 2 draft model from a GGUF stream (`general.architecture = "dflash"`).
+    ///
+    /// If `block_size != 0`, overrides the block size (validated in `2..=trained_block_size`).
+    pub fn load_gguf<R: std::io::Read + std::io::Seek>(
+        reader: &mut R,
+        block_size: usize,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        let content = gguf_file::Content::read(reader)?;
+        let mut cfg = DFlash2Config::from_gguf_content(&content)?;
+        if block_size != 0 {
+            if !(2..=cfg.block_size()).contains(&block_size) {
+                hanzo_ml::bail!(
+                    "dflash block_size {block_size} is outside 2..={}, the block this checkpoint was trained on",
+                    cfg.block_size()
+                );
+            }
+            cfg.dflash_config.block_size = block_size;
+        }
+        if cfg.block_size() < 2 {
+            hanzo_ml::bail!(
+                "dflash_config.block_size {} leaves no slot to predict — slot 0 is the anchor",
+                cfg.block_size()
+            );
+        }
+        if cfg.num_fused_layers() == 0 {
+            hanzo_ml::bail!(
+                "dflash_config.target_layer_ids is empty — there is no context to fuse"
+            );
+        }
+
+        let h = cfg.hidden_size;
+        let hd = cfg.head_dim;
+        let q_dim = cfg.num_attention_heads * hd;
+        let kv_dim = cfg.num_key_value_heads * hd;
+        let kernel_size = cfg.dflash_config.conv_kernel_size;
+        let group_size = cfg.dflash_config.conv_group_size;
+        if kernel_size == 0 {
+            hanzo_ml::bail!("dflash_config.conv_kernel_size must be >= 1");
+        }
+        if group_size == 0 || !h.is_multiple_of(group_size) {
+            hanzo_ml::bail!(
+                "dflash_config.conv_group_size {group_size} must divide hidden_size {h}"
+            );
+        }
+        let groups = h / group_size;
+
+        let rank = cfg.dflash_config.selector_rank;
+        let top_k = cfg.dflash_config.selector_top_k;
+        if rank == 0 {
+            hanzo_ml::bail!("dflash_config.selector_rank must be >= 1");
+        }
+        if top_k == 0 || top_k > cfg.vocab_size {
+            hanzo_ml::bail!(
+                "dflash_config.selector_top_k {top_k} must be in 1..={}",
+                cfg.vocab_size
+            );
+        }
+
+        let fc = gguf_linear(
+            &content,
+            reader,
+            "fc.weight",
+            &[h, cfg.num_fused_layers() * h],
+            device,
+            dtype,
+        )?;
+        let hidden_norm = gguf_rms_norm(
+            &content,
+            reader,
+            "enc.output_norm.weight",
+            h,
+            cfg.rms_norm_eps,
+            device,
+            dtype,
+        )?;
+
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for i in 0..cfg.num_hidden_layers {
+            let p = format!("blk.{i}");
+            let eps = cfg.rms_norm_eps;
+            layers.push(DFlash2Layer {
+                q_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_q.weight"),
+                    &[q_dim, h],
+                    device,
+                    dtype,
+                )?,
+                k_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_k.weight"),
+                    &[kv_dim, h],
+                    device,
+                    dtype,
+                )?,
+                v_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_v.weight"),
+                    &[kv_dim, h],
+                    device,
+                    dtype,
+                )?,
+                o_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_output.weight"),
+                    &[h, q_dim],
+                    device,
+                    dtype,
+                )?,
+                q_norm: gguf_rms_norm(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_q_norm.weight"),
+                    hd,
+                    eps,
+                    device,
+                    dtype,
+                )?,
+                k_norm: gguf_rms_norm(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_k_norm.weight"),
+                    hd,
+                    eps,
+                    device,
+                    dtype,
+                )?,
+                input_layernorm: gguf_rms_norm(
+                    &content,
+                    reader,
+                    &format!("{p}.attn_norm.weight"),
+                    h,
+                    eps,
+                    device,
+                    dtype,
+                )?,
+                post_attention_layernorm: gguf_rms_norm(
+                    &content,
+                    reader,
+                    &format!("{p}.ffn_norm.weight"),
+                    h,
+                    eps,
+                    device,
+                    dtype,
+                )?,
+                gate_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.ffn_gate.weight"),
+                    &[cfg.intermediate_size, h],
+                    device,
+                    dtype,
+                )?,
+                up_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.ffn_up.weight"),
+                    &[cfg.intermediate_size, h],
+                    device,
+                    dtype,
+                )?,
+                down_proj: gguf_linear(
+                    &content,
+                    reader,
+                    &format!("{p}.ffn_down.weight"),
+                    &[h, cfg.intermediate_size],
+                    device,
+                    dtype,
+                )?,
+                attention_conv: BlockConv {
+                    base_kernel: gguf_tensor(
+                        &content,
+                        reader,
+                        &format!("{p}.attn_conv_base"),
+                        &[2, kernel_size, h],
+                        device,
+                        dtype,
+                    )?,
+                    kernel_projection: gguf_linear(
+                        &content,
+                        reader,
+                        &format!("{p}.attn_conv_proj.weight"),
+                        &[2 * kernel_size * groups, h],
+                        device,
+                        dtype,
+                    )?,
+                    kernel_size,
+                    group_size,
+                    groups,
+                },
+                mlp_conv: BlockConv {
+                    base_kernel: gguf_tensor(
+                        &content,
+                        reader,
+                        &format!("{p}.ffn_conv_base"),
+                        &[2, kernel_size, h],
+                        device,
+                        dtype,
+                    )?,
+                    kernel_projection: gguf_linear(
+                        &content,
+                        reader,
+                        &format!("{p}.ffn_conv_proj.weight"),
+                        &[2 * kernel_size * groups, h],
+                        device,
+                        dtype,
+                    )?,
+                    kernel_size,
+                    group_size,
+                    groups,
+                },
+            });
+        }
+
+        let norm = gguf_rms_norm(
+            &content,
+            reader,
+            "output_norm.weight",
+            h,
+            cfg.rms_norm_eps,
+            device,
+            dtype,
+        )?;
+        let selector = CandidateSelector {
+            hidden_projection: gguf_linear(
+                &content,
+                reader,
+                "selector_hidden.weight",
+                &[rank, h],
+                device,
+                dtype,
+            )?,
+            predecessor_codebook: gguf_tensor(
+                &content,
+                reader,
+                "selector_predecessor.weight",
+                &[cfg.vocab_size, rank],
+                device,
+                dtype,
+            )?,
+            successor_codebook: gguf_tensor(
+                &content,
+                reader,
+                "selector_successor.weight",
+                &[cfg.vocab_size, rank],
+                device,
+                dtype,
+            )?,
+            top_k,
+        };
+
+        let rotary = RotaryEmbedding::new_yarn(
+            cfg.rope_theta() as f32,
+            cfg.head_dim,
+            cfg.max_position_embeddings,
+            cfg.yarn()?,
+            device,
+            true,
+            dtype,
+        )?;
+
+        Ok(Self {
+            fc,
+            hidden_norm,
+            layers,
+            norm,
+            selector,
+            rotary,
+            cfg,
+            device: device.clone(),
             dtype,
         })
     }
@@ -923,6 +1360,167 @@ fn select_candidate(scores: &[f32], temperature: f64) -> usize {
     probs.len() - 1
 }
 
+fn gguf_value_to_usize(key: &str, v: &gguf_file::Value) -> Result<usize> {
+    match *v {
+        gguf_file::Value::U8(x) => Ok(x as usize),
+        gguf_file::Value::I8(x) if x >= 0 => Ok(x as usize),
+        gguf_file::Value::U16(x) => Ok(x as usize),
+        gguf_file::Value::I16(x) if x >= 0 => Ok(x as usize),
+        gguf_file::Value::U32(x) => Ok(x as usize),
+        gguf_file::Value::I32(x) if x >= 0 => Ok(x as usize),
+        gguf_file::Value::U64(x) => Ok(x as usize),
+        gguf_file::Value::I64(x) if x >= 0 => Ok(x as usize),
+        _ => hanzo_ml::bail!("GGUF metadata key `{key}` expected non-negative int, got {v:?}"),
+    }
+}
+
+fn gguf_meta_usize_opt(content: &gguf_file::Content, key: &str) -> Result<Option<usize>> {
+    content
+        .metadata
+        .get(key)
+        .map(|v| gguf_value_to_usize(key, v))
+        .transpose()
+}
+
+fn gguf_meta_usize(content: &gguf_file::Content, key: &str) -> Result<usize> {
+    gguf_meta_usize_opt(content, key)?
+        .ok_or_else(|| hanzo_ml::Error::msg(format!("GGUF missing metadata key `{key}`")))
+}
+
+fn gguf_meta_f64_opt(content: &gguf_file::Content, key: &str) -> Result<Option<f64>> {
+    match content.metadata.get(key) {
+        None => Ok(None),
+        Some(gguf_file::Value::F32(x)) => Ok(Some(f64::from(*x))),
+        Some(gguf_file::Value::F64(x)) => Ok(Some(*x)),
+        Some(v) => hanzo_ml::bail!("GGUF metadata key `{key}` expected float, got {v:?}"),
+    }
+}
+
+fn gguf_meta_string_opt(content: &gguf_file::Content, key: &str) -> Result<Option<String>> {
+    match content.metadata.get(key) {
+        None => Ok(None),
+        Some(gguf_file::Value::String(s)) => Ok(Some(s.clone())),
+        Some(v) => hanzo_ml::bail!("GGUF metadata key `{key}` expected string, got {v:?}"),
+    }
+}
+
+fn gguf_meta_string(content: &gguf_file::Content, key: &str) -> Result<String> {
+    gguf_meta_string_opt(content, key)?
+        .ok_or_else(|| hanzo_ml::Error::msg(format!("GGUF missing metadata key `{key}`")))
+}
+
+fn gguf_meta_usize_array(content: &gguf_file::Content, key: &str) -> Result<Vec<usize>> {
+    let Some(gguf_file::Value::Array(items)) = content.metadata.get(key) else {
+        hanzo_ml::bail!("GGUF missing or non-array metadata key `{key}`");
+    };
+    items.iter().map(|v| gguf_value_to_usize(key, v)).collect()
+}
+
+fn gguf_meta_bool_array_opt(content: &gguf_file::Content, key: &str) -> Result<Option<Vec<bool>>> {
+    let Some(v) = content.metadata.get(key) else {
+        return Ok(None);
+    };
+    let gguf_file::Value::Array(items) = v else {
+        hanzo_ml::bail!("GGUF metadata key `{key}` expected array, got {v:?}");
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match *item {
+            gguf_file::Value::Bool(b) => out.push(b),
+            _ => hanzo_ml::bail!("GGUF metadata array `{key}` expected bool elements"),
+        }
+    }
+    Ok(Some(out))
+}
+
+fn gguf_tensor<R: std::io::Read + std::io::Seek>(
+    content: &gguf_file::Content,
+    reader: &mut R,
+    name: &str,
+    expected_shape: &[usize],
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    let qt = content.tensor(reader, name, device)?;
+    let t = qt.dequantize(device)?.to_dtype(dtype)?;
+    if t.dims() != expected_shape {
+        hanzo_ml::bail!(
+            "GGUF tensor `{name}` shape mismatch: expected {:?}, got {:?}",
+            expected_shape,
+            t.dims()
+        );
+    }
+    Ok(t)
+}
+
+fn gguf_linear<R: std::io::Read + std::io::Seek>(
+    content: &gguf_file::Content,
+    reader: &mut R,
+    name: &str,
+    expected_shape: &[usize],
+    device: &Device,
+    dtype: DType,
+) -> Result<Linear> {
+    Ok(Linear::new(
+        gguf_tensor(content, reader, name, expected_shape, device, dtype)?,
+        None,
+    ))
+}
+
+fn gguf_rms_norm<R: std::io::Read + std::io::Seek>(
+    content: &gguf_file::Content,
+    reader: &mut R,
+    name: &str,
+    size: usize,
+    eps: f64,
+    device: &Device,
+    dtype: DType,
+) -> Result<RmsNorm> {
+    RmsNorm::from_w(
+        gguf_tensor(content, reader, name, &[size], device, dtype)?,
+        eps,
+    )
+}
+
+fn resolve_gguf_checkpoint(path: &std::path::Path) -> Result<Option<std::path::PathBuf>> {
+    if path.is_file() {
+        let is_gguf = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
+        if !is_gguf {
+            hanzo_ml::bail!(
+                "dflash checkpoint `{}` is a file but not a .gguf archive",
+                path.display()
+            );
+        }
+        return Ok(Some(path.to_path_buf()));
+    }
+    if path.is_dir() && !path.join("config.json").exists() {
+        let mut ggufs: Vec<std::path::PathBuf> = std::fs::read_dir(path)
+            .map_err(|e| hanzo_ml::Error::msg(e.to_string()))?
+            .filter_map(|e| e.ok().map(|ent| ent.path()))
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+            })
+            .collect();
+        ggufs.sort();
+        if ggufs.len() == 1 {
+            return Ok(Some(ggufs.remove(0)));
+        }
+        if ggufs.len() > 1 {
+            hanzo_ml::bail!(
+                "dflash directory `{}` has multiple .gguf files and no config.json; pass the .gguf path directly",
+                path.display()
+            );
+        }
+    }
+    Ok(None)
+}
+
 /// Build a root VarBuilder over one DFlash 2 safetensors shard.
 pub fn dflash_varbuilder(
     path: &std::path::Path,
@@ -955,18 +1553,33 @@ impl DFlash2Proposer {
         Self { draft, heads }
     }
 
-    /// Load the draft at `dir` (`config.json` + `model.safetensors`) beside a target that
-    /// lends `heads`. A non-zero `block_size` shortens the drafted block: fewer masked slots
+    /// Load the draft at `path` — either a standalone `.gguf` archive (`general.architecture = "dflash"`)
+    /// or a directory holding `config.json` + `model.safetensors` — beside a target that lends
+    /// `heads`. A non-zero `block_size` shortens the drafted block: fewer masked slots
     /// is a valid draft, while a block longer than the trained one asks for positions the
     /// draft never learned to fill. The draft runs F32 on CPU and BF16 on accelerators — its
     /// dtype moves the accept rate only, since the target verify decides every emitted token.
     pub fn from_checkpoint(
-        dir: &std::path::Path,
+        path: &std::path::Path,
         block_size: usize,
         device: &Device,
         heads: SpeculativeSharedHeads,
     ) -> Result<Self> {
-        let mut cfg = DFlash2Config::from_json_file(dir.join("config.json"))?;
+        let dtype = if device.is_cpu() {
+            DType::F32
+        } else {
+            DType::BF16
+        };
+        if let Some(gguf_path) = resolve_gguf_checkpoint(path)? {
+            let mut file = std::fs::File::open(&gguf_path)
+                .map_err(|e| hanzo_ml::Error::msg(format!("{}: {e}", gguf_path.display())))?;
+            return Ok(Self::new(
+                Qwen3DFlash2::load_gguf(&mut file, block_size, device, dtype)?,
+                heads,
+            ));
+        }
+
+        let mut cfg = DFlash2Config::from_json_file(path.join("config.json"))?;
         if block_size != 0 {
             if !(2..=cfg.block_size()).contains(&block_size) {
                 hanzo_ml::bail!(
@@ -976,12 +1589,7 @@ impl DFlash2Proposer {
             }
             cfg.dflash_config.block_size = block_size;
         }
-        let dtype = if device.is_cpu() {
-            DType::F32
-        } else {
-            DType::BF16
-        };
-        let vb = dflash_varbuilder(&dir.join("model.safetensors"), dtype, device)?;
+        let vb = dflash_varbuilder(&path.join("model.safetensors"), dtype, device)?;
         Ok(Self::new(Qwen3DFlash2::load(cfg, vb)?, heads))
     }
 
@@ -1375,6 +1983,178 @@ mod tests {
             assert!(row.iter().any(|v| v.is_finite()));
         }
         eprintln!("dflash draft tokens = {toks:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn dflash_gguf_metadata_and_synthetic_load() -> Result<()> {
+        use hanzo_ml::quantized::{GgmlDType, QTensor};
+        use std::io::Cursor;
+
+        let dev = Device::Cpu;
+        let (vocab, h, inter, heads, kv_heads, hd) =
+            (16usize, 32usize, 64usize, 4usize, 2usize, 8usize);
+        let (q_dim, kv_dim) = (heads * hd, kv_heads * hd);
+        let (layers_n, block_size, kernel, group_size, rank, top_k) =
+            (2usize, 4usize, 2usize, 2usize, 32usize, 4usize);
+        let groups = h / group_size;
+        let target_layers_1based = [2u32, 6u32, 10u32];
+        let fused = target_layers_1based.len();
+
+        let kv_owned: Vec<(&str, gguf_file::Value)> = vec![
+            (
+                "general.architecture",
+                gguf_file::Value::String("dflash".into()),
+            ),
+            ("dflash.block_count", gguf_file::Value::U32(layers_n as u32)),
+            ("dflash.context_length", gguf_file::Value::U32(64)),
+            ("dflash.embedding_length", gguf_file::Value::U32(h as u32)),
+            (
+                "dflash.feed_forward_length",
+                gguf_file::Value::U32(inter as u32),
+            ),
+            (
+                "dflash.attention.head_count",
+                gguf_file::Value::U32(heads as u32),
+            ),
+            (
+                "dflash.attention.head_count_kv",
+                gguf_file::Value::U32(kv_heads as u32),
+            ),
+            (
+                "dflash.attention.key_length",
+                gguf_file::Value::U32(hd as u32),
+            ),
+            (
+                "dflash.attention.layer_norm_rms_epsilon",
+                gguf_file::Value::F32(1e-6),
+            ),
+            ("dflash.rope.freq_base", gguf_file::Value::F32(10_000_000.0)),
+            (
+                "dflash.rope.scaling.type",
+                gguf_file::Value::String("yarn".into()),
+            ),
+            ("dflash.rope.scaling.factor", gguf_file::Value::F32(4.0)),
+            (
+                "dflash.rope.scaling.original_context_length",
+                gguf_file::Value::U32(16),
+            ),
+            (
+                "dflash.block_size",
+                gguf_file::Value::U32(block_size as u32),
+            ),
+            (
+                "dflash.conv_kernel_size",
+                gguf_file::Value::U32(kernel as u32),
+            ),
+            (
+                "dflash.conv_group_size",
+                gguf_file::Value::U32(group_size as u32),
+            ),
+            ("dflash.selector_rank", gguf_file::Value::U32(rank as u32)),
+            ("dflash.selector_top_k", gguf_file::Value::U32(top_k as u32)),
+            (
+                "dflash.target_layers",
+                gguf_file::Value::Array(
+                    target_layers_1based
+                        .iter()
+                        .map(|&v| gguf_file::Value::U32(v))
+                        .collect(),
+                ),
+            ),
+            ("dflash.attention.sliding_window", gguf_file::Value::U32(32)),
+            (
+                "dflash.attention.sliding_window_pattern",
+                gguf_file::Value::Array(vec![
+                    gguf_file::Value::Bool(true),
+                    gguf_file::Value::Bool(false),
+                ]),
+            ),
+            ("tokenizer.ggml.mask_token_id", gguf_file::Value::U32(7)),
+        ];
+
+        let mut tensors_owned: Vec<(String, QTensor)> = Vec::new();
+        let mut push_t = |name: &str, shape: &[usize], quant: bool| -> Result<()> {
+            let len: usize = shape.iter().product();
+            let t = Tensor::full(0.05f32, len, &dev)?.reshape(shape)?;
+            let dt = if quant {
+                GgmlDType::Q8_0
+            } else {
+                GgmlDType::F32
+            };
+            tensors_owned.push((name.to_string(), QTensor::quantize(&t, dt)?));
+            Ok(())
+        };
+        push_t("fc.weight", &[h, fused * h], true)?;
+        push_t("enc.output_norm.weight", &[h], false)?;
+        push_t("output_norm.weight", &[h], false)?;
+        push_t("selector_hidden.weight", &[rank, h], true)?;
+        push_t("selector_predecessor.weight", &[vocab, rank], true)?;
+        push_t("selector_successor.weight", &[vocab, rank], true)?;
+        for i in 0..layers_n {
+            let p = format!("blk.{i}");
+            push_t(&format!("{p}.attn_norm.weight"), &[h], false)?;
+            push_t(&format!("{p}.ffn_norm.weight"), &[h], false)?;
+            push_t(&format!("{p}.attn_q.weight"), &[q_dim, h], true)?;
+            push_t(&format!("{p}.attn_k.weight"), &[kv_dim, h], true)?;
+            push_t(&format!("{p}.attn_v.weight"), &[kv_dim, h], true)?;
+            push_t(&format!("{p}.attn_output.weight"), &[h, q_dim], true)?;
+            push_t(&format!("{p}.attn_q_norm.weight"), &[hd], false)?;
+            push_t(&format!("{p}.attn_k_norm.weight"), &[hd], false)?;
+            push_t(&format!("{p}.attn_conv_base"), &[2, kernel, h], false)?;
+            push_t(
+                &format!("{p}.attn_conv_proj.weight"),
+                &[2 * kernel * groups, h],
+                true,
+            )?;
+            push_t(&format!("{p}.ffn_conv_base"), &[2, kernel, h], false)?;
+            push_t(
+                &format!("{p}.ffn_conv_proj.weight"),
+                &[2 * kernel * groups, h],
+                true,
+            )?;
+            push_t(&format!("{p}.ffn_gate.weight"), &[inter, h], true)?;
+            push_t(&format!("{p}.ffn_up.weight"), &[inter, h], true)?;
+            push_t(&format!("{p}.ffn_down.weight"), &[h, inter], true)?;
+        }
+
+        let kv_refs: Vec<(&str, &gguf_file::Value)> =
+            kv_owned.iter().map(|(k, v)| (*k, v)).collect();
+        let tensor_refs: Vec<(&str, &QTensor)> =
+            tensors_owned.iter().map(|(n, t)| (n.as_str(), t)).collect();
+        let mut buf = Cursor::new(Vec::new());
+        gguf_file::write(&mut buf, &kv_refs, &tensor_refs)?;
+
+        let mut reader = Cursor::new(buf.into_inner());
+        let model = Qwen3DFlash2::load_gguf(&mut reader, 3, &dev, DType::F32)?;
+        assert_eq!(model.config().dflash_config.target_layer_ids, vec![1, 5, 9]);
+        assert_eq!(model.config().dflash_config.mask_token_id, 7);
+        assert_eq!(model.config().block_size(), 3);
+        assert_eq!(model.config().draft_len(), 2);
+        assert_eq!(model.config().layer_window(0), Some(32));
+        assert_eq!(model.config().layer_window(1), None);
+        assert!(model.config().yarn()?.is_some());
+
+        let embed_w = Tensor::randn(0f32, 0.1f32, (vocab, h), &dev)?;
+        let head_w = Tensor::randn(0f32, 0.1f32, (vocab, h), &dev)?;
+        let embed = |ids: &Tensor| -> Result<Tensor> {
+            let flat = ids.flatten_all()?;
+            embed_w
+                .index_select(&flat, 0)?
+                .reshape((ids.dim(0)?, ids.dim(1)?, h))
+        };
+        let lm_head =
+            |hidden: &Tensor| -> Result<Tensor> { hidden.matmul(&head_w.t()?.contiguous()?) };
+        let hiddens = (0..fused)
+            .map(|_| Tensor::randn(0f32, 1f32, (6, h), &dev))
+            .collect::<Result<Vec<_>>>()?;
+        let window = crate::speculative::HiddenWindow::new(0, hiddens)?;
+        let (tokens, logits) = model.draft_block(&window, 2, 6, &embed, &lm_head, 0.0)?;
+        assert_eq!(tokens.dims(), &[2]);
+        assert_eq!(logits.dims(), &[2, vocab]);
+        for row in logits.to_vec2::<f32>()? {
+            assert!(row.iter().any(|v| v.is_finite()));
+        }
         Ok(())
     }
 }

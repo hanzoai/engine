@@ -234,7 +234,7 @@ pub(crate) fn topk(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use hanzo_ml::Device;
     use std::collections::HashMap;

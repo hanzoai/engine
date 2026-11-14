@@ -9,9 +9,10 @@ mod tiled;
 
 pub(crate) use flash::flash_attn;
 pub use lsa::{
-    build_buckets, build_hierarchy, build_shapes, lsa_sdpa, pca_projections, project, regroup,
-    select_keep_indices, shape_buckets, sparse_gather_sdpa, Buckets, EarlyBudget, Growth,
-    Hierarchy, LearnedProjection, LsaConfig, LsaSessionCache, RotaryLayout, Shapes,
+    build_buckets, build_hierarchy, build_shapes, lsa_sdpa, paged_lsa_sdpa, pca_projections,
+    project, regroup, select_keep_indices, shape_buckets, sparse_gather_sdpa, Buckets, EarlyBudget,
+    Growth, Hierarchy, LearnedProjection, LsaConfig, LsaSessionCache, PagedKvGather, RotaryLayout,
+    Shapes,
 };
 pub(crate) use naive::{maybe_synchronize, naive_sdpa};
 pub(crate) use sinks::sinks_attn;

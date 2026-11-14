@@ -55,10 +55,12 @@ impl AttentionMask {
 pub mod backends;
 
 pub use backends::lsa::{
-    build_buckets, build_hierarchy, build_shapes, lsa_sdpa, pca_projections, project, regroup,
-    select_keep_indices, shape_buckets, sparse_gather_sdpa, Buckets, EarlyBudget, Growth,
-    Hierarchy, LearnedProjection, LsaConfig, LsaSessionCache, RotaryLayout, Shapes,
+    build_buckets, build_hierarchy, build_shapes, lsa_sdpa, paged_lsa_sdpa, pca_projections,
+    project, regroup, select_keep_indices, shape_buckets, sparse_gather_sdpa, Buckets, EarlyBudget,
+    Growth, Hierarchy, LearnedProjection, LsaConfig, LsaSessionCache, PagedKvGather, RotaryLayout,
+    Shapes,
 };
+pub(crate) use backends::lsa::{evict_paged_lsa, rollback_paged_lsa};
 #[allow(unused)]
 pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn, tiled_sdpa};
 

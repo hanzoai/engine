@@ -83,6 +83,7 @@ pub async fn run_bench(
         )
         .with_prompt_lookup_optional(runtime.prompt_lookup_ngram, runtime.gamma())
         .with_dflash_optional(runtime.dflash.clone(), runtime.dflash_block_size)
+        .with_lsa_optional(runtime.lsa_config())
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)

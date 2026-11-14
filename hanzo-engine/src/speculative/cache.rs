@@ -131,6 +131,12 @@ impl SpeculativeCacheGuard for PagedSpeculativeCacheGuard<'_> {
     fn rollback_to(&mut self, keep_len: usize) -> Result<()> {
         if keep_len < self.reserved_len {
             let mut kv_mgr = crate::get_mut_arcmutex!(self.metadata.kv_cache_manager);
+            if let Some(&block_0) = kv_mgr
+                .get_block_ids(self.seq_id)
+                .and_then(|blocks| blocks.first())
+            {
+                crate::attention::rollback_paged_lsa(block_0, keep_len);
+            }
             kv_mgr.trim_request_to_num_tokens(self.seq_id, keep_len);
         }
         Ok(())

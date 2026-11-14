@@ -299,6 +299,9 @@ pub struct ServerBuilder {
     /// `block_size` of 0 drafts the checkpoint's full trained block.
     dflash: Option<(String, usize)>,
 
+    /// Optional Latent Sparse Attention (Paged-LSA) config.
+    lsa: Option<hanzo_engine::LsaConfig>,
+
     /// Draft tokens proposed per target verification step.
     gamma: usize,
 
@@ -344,6 +347,7 @@ impl Default for ServerBuilder {
             draft_model: defaults::DRAFT_MODEL,
             prompt_lookup_ngram: defaults::PROMPT_LOOKUP_NGRAM,
             dflash: defaults::DFLASH,
+            lsa: None,
             gamma: defaults::GAMMA,
             disable_eos_stop: false,
             code_exec_config: None,
@@ -690,6 +694,12 @@ impl ServerBuilder {
         self
     }
 
+    /// Configure Latent Sparse Attention (Paged-LSA) without disabling PagedAttention.
+    pub fn with_lsa_optional(mut self, lsa: Option<hanzo_engine::LsaConfig>) -> Self {
+        self.lsa = lsa;
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -829,6 +839,7 @@ impl ServerBuilder {
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(self.chat_template)
             .with_jinja_explicit(self.jinja_explicit)
+            .with_lsa_optional(self.lsa.clone())
             .build()?;
 
         hanzo_instance_info(&*loader);
@@ -981,6 +992,7 @@ impl ServerBuilder {
                     .clone()
                     .or(self.jinja_explicit.clone()),
             )
+            .with_lsa_optional(self.lsa.clone())
             .build()?;
 
         hanzo_instance_info(&*loader);
@@ -1153,6 +1165,7 @@ impl ServerBuilder {
                         .clone()
                         .or(self.jinja_explicit.clone()),
                 )
+                .with_lsa_optional(self.lsa.clone())
                 .build()?;
 
             let mapper = init_mapper(

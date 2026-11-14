@@ -271,6 +271,9 @@ impl KVCacheManager {
     /// are evicted first when the free list is used for LRU eviction.
     pub fn free(&mut self, request_id: usize) {
         if let Some(req) = self.req_to_blocks.remove(&request_id) {
+            if let Some(&block_0) = req.block_ids.first() {
+                crate::attention::evict_paged_lsa(block_0);
+            }
             // Free in reverse order for LRU eviction priority
             let reversed: Vec<usize> = req.block_ids.into_iter().rev().collect();
             self.block_pool.free_blocks(&reversed);
@@ -282,6 +285,11 @@ impl KVCacheManager {
     /// This is useful when a speculative path over-allocates temporary lookahead
     /// slots and then needs to release unneeded tail blocks.
     pub fn trim_request_to_num_tokens(&mut self, request_id: usize, num_tokens: usize) {
+        if let Some(req) = self.req_to_blocks.get(&request_id) {
+            if let Some(&block_0) = req.block_ids.first() {
+                crate::attention::rollback_paged_lsa(block_0, num_tokens);
+            }
+        }
         let num_required_blocks = num_tokens.div_ceil(self.block_size);
 
         let mut removed_blocks = {

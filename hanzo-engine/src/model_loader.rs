@@ -58,6 +58,12 @@ impl LoaderBuilder {
         self
     }
 
+    /// Optionally configure Latent Sparse Attention (D-LSA / N-LSA).
+    pub fn with_lsa_optional(mut self, lsa: Option<crate::attention::LsaConfig>) -> Self {
+        self.lsa = lsa;
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<Box<dyn Loader>> {
         loader_from_model_selected(self)
     }

@@ -172,7 +172,9 @@ pub(crate) mod tests {
         let t = t.contiguous().unwrap();
         let (s, l) = t.storage_and_layout();
         assert_eq!(l.start_offset(), 0);
-        let Storage::Cuda(s) = &*s else { unreachable!() };
+        let Storage::Cuda(s) = &*s else {
+            unreachable!()
+        };
         let CudaStorageSlice::BF16(s) = &s.slice else {
             panic!("not bf16")
         };
@@ -210,18 +212,26 @@ pub(crate) mod tests {
 
     fn run(lane: &Lane, x: &CudaSlice<bf16>, w: &CudaSlice<bf16>, m: usize, n: usize) -> Vec<u16> {
         let mut y = lane.stream().alloc_zeros::<bf16>(m * n).unwrap();
-        lane.linear(&x.slice(..m * HIDDEN), w, &mut y, m, n, HIDDEN).unwrap();
+        lane.linear(&x.slice(..m * HIDDEN), w, &mut y, m, n, HIDDEN)
+            .unwrap();
         lane.stream().synchronize().unwrap();
         host(lane.stream(), &y)
     }
 
-    fn captured(lane: &Lane, x: &CudaSlice<bf16>, w: &CudaSlice<bf16>, m: usize, n: usize) -> Vec<u16> {
+    fn captured(
+        lane: &Lane,
+        x: &CudaSlice<bf16>,
+        w: &CudaSlice<bf16>,
+        m: usize,
+        n: usize,
+    ) -> Vec<u16> {
         let s = lane.stream().clone();
         let mut y = s.alloc_zeros::<bf16>(m * n).unwrap();
         s.synchronize().unwrap();
         s.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .unwrap();
-        lane.linear(&x.slice(..m * HIDDEN), w, &mut y, m, n, HIDDEN).unwrap();
+        lane.linear(&x.slice(..m * HIDDEN), w, &mut y, m, n, HIDDEN)
+            .unwrap();
         let g = s
             .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH)
             .unwrap()
@@ -274,7 +284,8 @@ pub(crate) mod tests {
         let w = slice(&g["wg"]);
         for m in gate_ms() {
             let mut y = main.stream().alloc_zeros::<bf16>(m * 512).unwrap();
-            main.linear(&x.slice(..m * HIDDEN), &w, &mut y, m, 512, HIDDEN).unwrap();
+            main.linear(&x.slice(..m * HIDDEN), &w, &mut y, m, 512, HIDDEN)
+                .unwrap();
             let logits = Tensor::from((
                 Storage::Cuda(hanzo_ml::cuda_backend::CudaStorage {
                     slice: CudaStorageSlice::BF16(y),
@@ -340,7 +351,15 @@ pub(crate) mod tests {
         let meta = gate_meta();
         for (gate, n) in [("router", 512usize), ("shared", 1)] {
             let w = slice(&g[if n == 1 { "ws" } else { "wg" }]);
-            let out: Vec<Vec<u16>> = (0..=512).map(|m| if m == 0 { vec![] } else { run(&main, &x, &w, m, n) }).collect();
+            let out: Vec<Vec<u16>> = (0..=512)
+                .map(|m| {
+                    if m == 0 {
+                        vec![]
+                    } else {
+                        run(&main, &x, &w, m, n)
+                    }
+                })
+                .collect();
             for list in ["capture_nospec", "capture_production"] {
                 let sizes: Vec<usize> = serde_json::from_str(&meta[list]).unwrap();
                 for t in 1..=*sizes.last().unwrap() {
@@ -375,8 +394,15 @@ pub(crate) mod tests {
             println!(
                 "{gate} gate (N={n}): {} classes: {}; 512-grid crossings: T={}",
                 reps.len(),
-                reps.iter().map(|(_, m)| runs(m)).collect::<Vec<_>>().join(" | "),
-                if cross.is_empty() { "none".into() } else { runs(&cross) }
+                reps.iter()
+                    .map(|(_, m)| runs(m))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+                if cross.is_empty() {
+                    "none".into()
+                } else {
+                    runs(&cross)
+                }
             );
         }
     }
@@ -463,7 +489,10 @@ pub(crate) mod tests {
         let mut keys: Vec<_> = fails.keys().copied().collect();
         keys.sort();
         for k in keys {
-            println!("mutation '{k}' differs from the reference at M {:?}", fails[k]);
+            println!(
+                "mutation '{k}' differs from the reference at M {:?}",
+                fails[k]
+            );
         }
         assert!(fails.contains_key("no workspace"));
         assert!(fails.contains_key("f32 gemm + cast"));
@@ -496,7 +525,14 @@ pub(crate) mod tests {
                 let (n, layer) = key[2..].split_once('.').unwrap();
                 let l: usize = layer.parse().unwrap();
                 let w = weights.entry(l).or_insert_with(|| {
-                    slice(&ckpt.load(&format!("model.language_model.layers.{l}.mlp.gate.weight"), &dev).unwrap())
+                    slice(
+                        &ckpt
+                            .load(
+                                &format!("model.language_model.layers.{l}.mlp.gate.weight"),
+                                &dev,
+                            )
+                            .unwrap(),
+                    )
                 });
                 let x = &d[key];
                 let m = x.dims()[0];
@@ -517,20 +553,29 @@ pub(crate) mod tests {
                     None,
                 )
                 .unwrap();
-                let (ids, wts) = (route::tests::ids(&out.indices), route::tests::bits(&out.values));
+                let (ids, wts) = (
+                    route::tests::ids(&out.indices),
+                    route::tests::bits(&out.values),
+                );
                 let (want_ids, want_wts) = (
                     route::tests::ids(&d[&format!("i.{n}.{l}")]),
                     route::tests::bits(&d[&format!("w.{n}.{l}")]),
                 );
                 for t in 0..m {
                     pairs += 1;
-                    logit_ok += (got[t * 512..(t + 1) * 512] == want[t * 512..(t + 1) * 512]) as usize;
+                    logit_ok +=
+                        (got[t * 512..(t + 1) * 512] == want[t * 512..(t + 1) * 512]) as usize;
                     id_ok += (ids[t * 10..(t + 1) * 10] == want_ids[t * 10..(t + 1) * 10]) as usize;
                     w_ok += (wts[t * 10..(t + 1) * 10] == want_wts[t * 10..(t + 1) * 10]) as usize;
                 }
             }
             println!("c={c}: {pairs} (token, layer) pairs; logits {logit_ok}, ids {id_ok}, weights {w_ok} bitwise");
-            total = (total.0 + pairs, total.1 + logit_ok, total.2 + id_ok, total.3 + w_ok);
+            total = (
+                total.0 + pairs,
+                total.1 + logit_ok,
+                total.2 + id_ok,
+                total.3 + w_ok,
+            );
         }
         assert!(total.0 > 0, "no dumps under {dir}");
         assert!(
