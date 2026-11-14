@@ -1739,8 +1739,10 @@ pub mod text_models_inputs_processor {
         let paged_attn_meta = if let Some(paged_attn_input) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see make_prompt_chunk for explanation)
             let max_slot_mapping_len = slot_mappings.iter().map(Vec::len).max().unwrap_or(1);
-            let use_standard_metadata =
-                paged_attn_input.attention_backend == AttentionBackendKind::Standard;
+            let use_standard_metadata = should_emit_standard_metadata(
+                paged_attn_input.attention_backend,
+                crate::attention::LsaConfig::global().is_some(),
+            );
             let slot_mappings = _make_tensor_with_pad(
                 slot_mappings,
                 max_slot_mapping_len,
@@ -2358,6 +2360,10 @@ pub mod text_models_inputs_processor {
         }
     }
 
+    fn should_emit_standard_metadata(backend: AttentionBackendKind, lsa_active: bool) -> bool {
+        backend == AttentionBackendKind::Standard || lsa_active
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -2419,6 +2425,26 @@ pub mod text_models_inputs_processor {
             // Verify step: staged proposals ride behind the last token, which keeps its prior.
             decode.set_staged_speculative(vec![9, 10], None);
             assert_eq!(process(&mut [&mut decode], false), vec![vec![6, 7]]);
+        }
+
+        #[test]
+        fn standard_metadata_emitted_when_lsa_active_even_under_flashinfer() {
+            assert!(!should_emit_standard_metadata(
+                AttentionBackendKind::FlashInfer,
+                false
+            ));
+            assert!(should_emit_standard_metadata(
+                AttentionBackendKind::FlashInfer,
+                true
+            ));
+            assert!(should_emit_standard_metadata(
+                AttentionBackendKind::Standard,
+                false
+            ));
+            assert!(should_emit_standard_metadata(
+                AttentionBackendKind::Standard,
+                true
+            ));
         }
     }
 }

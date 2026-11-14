@@ -1350,7 +1350,8 @@ impl NormalPipeline {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
-        if self.model.has_speculative_proposer() {
+        if self.model.has_speculative_proposer() || crate::attention::LsaConfig::global().is_some()
+        {
             return Ok(None);
         }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
@@ -1541,7 +1542,8 @@ impl NormalPipeline {
         if !metal_decode_graphs_enabled() || !self.model.supports_metal_decode_graphs() {
             return Ok(None);
         }
-        if self.model.has_speculative_proposer() {
+        if self.model.has_speculative_proposer() || crate::attention::LsaConfig::global().is_some()
+        {
             return Ok(None);
         }
         let Some((kv_cache, metadata)) = paged_attn_meta else {

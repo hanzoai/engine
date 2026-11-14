@@ -243,6 +243,46 @@ pub async fn system_doctor() -> Json<hanzo_engine::DoctorReport> {
     Json(run_doctor())
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LsaStatusResponse {
+    pub enabled: bool,
+    /// Attention calls LSA has served since the process started.
+    pub dispatches: u64,
+    pub config: Option<hanzo_engine::LsaConfig>,
+}
+
+/// GET `/v1/lsa` — inspect active Latent Sparse Attention (D-LSA / N-LSA) configuration.
+pub async fn get_lsa_config() -> Json<LsaStatusResponse> {
+    let config = hanzo_engine::LsaConfig::global().map(|c| (*c).clone());
+    Json(LsaStatusResponse {
+        enabled: config.is_some(),
+        dispatches: hanzo_engine::LsaConfig::dispatches(),
+        config,
+    })
+}
+
+/// POST `/v1/lsa` — enable or update Latent Sparse Attention (D-LSA / N-LSA) live at runtime.
+pub async fn set_lsa_config(
+    Json(config): Json<hanzo_engine::LsaConfig>,
+) -> Json<LsaStatusResponse> {
+    config.clone().install();
+    Json(LsaStatusResponse {
+        enabled: true,
+        dispatches: hanzo_engine::LsaConfig::dispatches(),
+        config: Some(config),
+    })
+}
+
+/// DELETE `/v1/lsa` — disable Latent Sparse Attention and revert to standard attention.
+pub async fn delete_lsa_config() -> Json<LsaStatusResponse> {
+    hanzo_engine::LsaConfig::clear();
+    Json(LsaStatusResponse {
+        enabled: false,
+        dispatches: hanzo_engine::LsaConfig::dispatches(),
+        config: None,
+    })
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ReIsqRequest {
     #[schema(example = "Q4K")]

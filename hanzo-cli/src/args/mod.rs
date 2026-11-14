@@ -750,6 +750,26 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub dflash_block_size: usize,
 
+    /// Enable Latent Sparse Attention (Paged-LSA) on full-attention layers without disabling PagedAttention.
+    #[arg(long, default_value_t = false)]
+    #[serde(default)]
+    pub lsa: bool,
+
+    /// Minimum context length before routing to LSA (implies `--lsa` when set).
+    #[arg(long)]
+    #[serde(default)]
+    pub lsa_min_seq_len: Option<usize>,
+
+    /// Maximum long-range keys unpacked per query `k` (implies `--lsa` when set).
+    #[arg(long)]
+    #[serde(default)]
+    pub lsa_top_k: Option<usize>,
+
+    /// Number of LSA buckets selected per query `p` (implies `--lsa` when set).
+    #[arg(long)]
+    #[serde(default)]
+    pub lsa_top_p: Option<usize>,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -919,6 +939,22 @@ pub struct BenchRuntimeOptions {
     /// full block.
     #[arg(long, default_value_t = 0)]
     pub dflash_block_size: usize,
+
+    /// Enable Latent Sparse Attention (Paged-LSA) on full-attention layers without disabling PagedAttention.
+    #[arg(long, default_value_t = false)]
+    pub lsa: bool,
+
+    /// Minimum context length before routing to LSA (implies `--lsa` when set).
+    #[arg(long)]
+    pub lsa_min_seq_len: Option<usize>,
+
+    /// Maximum long-range keys unpacked per query `k` (implies `--lsa` when set).
+    #[arg(long)]
+    pub lsa_top_k: Option<usize>,
+
+    /// Number of LSA buckets selected per query `p` (implies `--lsa` when set).
+    #[arg(long)]
+    pub lsa_top_p: Option<usize>,
 }
 
 impl BenchRuntimeOptions {
@@ -950,6 +986,15 @@ impl BenchRuntimeOptions {
 
     pub fn gamma(&self) -> usize {
         self.gamma.unwrap_or(DEFAULT_GAMMA)
+    }
+
+    pub fn lsa_config(&self) -> Option<hanzo_engine::LsaConfig> {
+        build_lsa_config(
+            self.lsa,
+            self.lsa_min_seq_len,
+            self.lsa_top_k,
+            self.lsa_top_p,
+        )
     }
 }
 
@@ -1018,6 +1063,37 @@ impl RuntimeOptions {
     pub fn gamma(&self) -> usize {
         self.gamma.unwrap_or(DEFAULT_GAMMA)
     }
+
+    pub fn lsa_config(&self) -> Option<hanzo_engine::LsaConfig> {
+        build_lsa_config(
+            self.lsa,
+            self.lsa_min_seq_len,
+            self.lsa_top_k,
+            self.lsa_top_p,
+        )
+    }
+}
+
+fn build_lsa_config(
+    enabled: bool,
+    min_seq_len: Option<usize>,
+    top_k: Option<usize>,
+    top_p: Option<usize>,
+) -> Option<hanzo_engine::LsaConfig> {
+    if !enabled && min_seq_len.is_none() && top_k.is_none() && top_p.is_none() {
+        return None;
+    }
+    let mut cfg = hanzo_engine::LsaConfig::zen_27b();
+    if let Some(v) = min_seq_len {
+        cfg.min_seq_len = v;
+    }
+    if let Some(v) = top_k {
+        cfg.top_k = v;
+    }
+    if let Some(v) = top_p {
+        cfg.top_p = v;
+    }
+    Some(cfg)
 }
 
 impl From<TuneProfileArg> for hanzo_engine::TuneProfile {
@@ -1089,6 +1165,10 @@ impl Default for RuntimeOptions {
             prompt_lookup_ngram: None,
             dflash: None,
             dflash_block_size: 0,
+            lsa: false,
+            lsa_min_seq_len: None,
+            lsa_top_k: None,
+            lsa_top_p: None,
             mcp_config: None,
             agent: false,
             enable_search: false,

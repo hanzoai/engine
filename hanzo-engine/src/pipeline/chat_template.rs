@@ -398,6 +398,27 @@ fn parse_gemma4_tool_call_arguments(messages: &mut [IndexMap<String, MessageCont
     }
 }
 
+/// Strip Jinja2 `{% generation %}` / `{% endgeneration %}` assistant-mask tags
+/// (which `minijinja` does not support) while preserving any `-`/`~` whitespace
+/// control markers on either side of the tag.
+fn strip_generation_tags(template: &str) -> String {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"\{%(?P<left>[-~])?\s*(?:end)?generation\s*(?P<right>[-~])?%\}").unwrap()
+    });
+    re.replace_all(template, |caps: &regex::Captures| {
+        let left = caps.name("left").map(|m| m.as_str());
+        let right = caps.name("right").map(|m| m.as_str());
+        match (left, right) {
+            (Some(l), Some(r)) => format!("{{{{{l} \"\" {r}}}}}"),
+            (Some(l), None) => format!("{{{{{l} \"\" }}}}"),
+            (None, Some(r)) => format!("{{{{ \"\" {r}}}}}"),
+            (None, None) => String::new(),
+        }
+    })
+    .into_owned()
+}
+
 /// Pre-process messages for Gemma 4 tool templates.
 ///
 /// The Gemma 4 chat template expects `tool_responses` as a field on a
@@ -736,11 +757,7 @@ pub fn apply_chat_template_to(
         template = template.replace("{%- set meta = message.get(\"metadata\", \"\") %}", "");
         template = template.replace("{{ meta }}", "");
     }
-    if template.contains("{% generation %}") && template.contains("{% endgeneration %}") {
-        // Strip for smollm3 models
-        template = template.replace("{% generation %}", "");
-        template = template.replace("{% endgeneration %}", "");
-    }
+    template = strip_generation_tags(&template);
 
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
@@ -1193,5 +1210,40 @@ mod tests {
         .expect("developer role and string tool arguments must render cleanly");
         assert!(rendered.contains("<sys>base instructions\n\nsandbox rules</sys>"));
         assert!(rendered.contains("get_weather:city=Boston"));
+    }
+
+    #[test]
+    fn generation_tags_with_whitespace_trimming_render_cleanly() {
+        let tpl = ChatTemplateValue(Either::Left(
+            "{%- for message in messages %}\
+             {{- '<|im_start|>' + message.role + '\\n' }}\n        \
+             {%- generation %}\n        \
+             {{- message.content }}\n        \
+             {%- endgeneration %}\n        \
+             {{- '<|im_end|>\\n' }}\n\
+             {%- endfor %}"
+                .to_string(),
+        ));
+        let assistant_msg = IndexMap::from([
+            ("role".to_string(), Either::Left("assistant".to_string())),
+            ("content".to_string(), Either::Left("world".to_string())),
+        ]);
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello"), assistant_msg],
+            false,
+            None,
+            None,
+            None,
+            &tpl,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .expect("{%- generation %} / {%- endgeneration %} must render cleanly");
+        assert_eq!(
+            rendered,
+            "<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\nworld<|im_end|>\n"
+        );
     }
 }

@@ -1425,7 +1425,7 @@ impl GGUFPipeline {
         if !cuda_decode_graphs_enabled() || !self.model_supports_decode_graph() {
             return Ok(None);
         }
-        if self.draft_proposer.is_some() {
+        if self.draft_proposer.is_some() || crate::attention::LsaConfig::global().is_some() {
             return Ok(None);
         }
         // Only steady-state single-token decode with paged metadata present and no
@@ -1659,7 +1659,7 @@ impl GGUFPipeline {
         if !cuda_prefill_graphs_enabled() || !self.model_supports_prefill_graph() {
             return Ok(None);
         }
-        if self.draft_proposer.is_some() {
+        if self.draft_proposer.is_some() || crate::attention::LsaConfig::global().is_some() {
             return Ok(None);
         }
         // Offset-0 first prompt chunk only: the mask/positions/cumulative-seqlens are then fixed for
@@ -1903,7 +1903,7 @@ impl GGUFPipeline {
         // re-issues only the recorded kernels, so none of that runs and the draft reads rows
         // that were never written. The CUDA and Vulkan paths stay eager under speculation for
         // this reason; this one claimed to mirror the CUDA gate and had not.
-        if self.draft_proposer.is_some() {
+        if self.draft_proposer.is_some() || crate::attention::LsaConfig::global().is_some() {
             return Ok(None);
         }
         // Mirror the CUDA gate: only steady-state single-token decode with paged
@@ -2245,7 +2245,10 @@ impl GGUFPipeline {
         seqlen_offsets: &[usize],
         context_lens: &[(usize, usize)],
     ) -> Result<Option<Tensor>, hanzo_ml::Error> {
-        if !crate::perf_flags::vulkan_graphs_enabled() || self.draft_proposer.is_some() {
+        if !crate::perf_flags::vulkan_graphs_enabled()
+            || self.draft_proposer.is_some()
+            || crate::attention::LsaConfig::global().is_some()
+        {
             return Ok(None);
         }
         // The decode graph captures the model's NAIVE-KV forward (metadata=None). When PagedAttention is

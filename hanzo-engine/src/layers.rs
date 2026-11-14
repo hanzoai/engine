@@ -3561,18 +3561,42 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        let inv_freq: Vec<_> = (0..head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
-            .collect();
+        Self::new_yarn(
+            base,
+            head_dim,
+            max_position_embeddings,
+            None,
+            device,
+            is_gpt_neox,
+            dtype,
+        )
+    }
+
+    pub fn new_yarn(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        yarn: Option<Yarn>,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        let inv_freq: Vec<_> = match yarn {
+            Some(y) => y.inv_freq(base, head_dim),
+            None => (0..head_dim)
+                .step_by(2)
+                .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+                .collect(),
+        };
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
         let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let sin = freqs.sin()?.to_dtype(dtype)?;
-        let cos = freqs.cos()?.to_dtype(dtype)?;
+        let scale = yarn.map_or(1.0f64, |y| y.mscale());
+        let sin = (freqs.sin()? * scale)?.to_dtype(dtype)?;
+        let cos = (freqs.cos()? * scale)?.to_dtype(dtype)?;
 
         Ok(Self {
             cos,
