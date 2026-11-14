@@ -59,7 +59,7 @@
 //! `gdn.rs` recurrence instead consumes HF grouped order (it repeats grouped: j -> j / v_per_group);
 //! that path is untouched and still correct for its grouped inputs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -78,7 +78,7 @@ use crate::pipeline::{extract_logits, EitherCache, KvCache};
 use crate::utils::gguf_metadata::{ContentMetadata, DEFAULT_FULL_ATTENTION_INTERVAL};
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
-use hanzo_ml::quantized::QMatMul;
+use hanzo_ml::quantized::{gguf_file, QMatMul, QTensor};
 use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::{Embedding, Module};
 use hanzo_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
@@ -95,6 +95,353 @@ const L2_NORM_EPS: f64 = 1e-6;
 enum LayerType {
     FullAttention,
     LinearAttention,
+}
+
+// ===================== Blockwise Hadamard activation rotation =====================
+
+/// Parsed GGUF Hadamard folding metadata (`prism.hadamard.*` or `zen.hadamard.*`).
+#[derive(Debug, Clone)]
+pub(crate) struct HadamardMeta {
+    pub(crate) block_size: usize,
+    pub(crate) explicit_signs: bool,
+    pub(crate) signs: HashMap<usize, Vec<f32>>,
+    pub(crate) weight_names: HashSet<String>,
+    pub(crate) inverse_weight_names: HashSet<String>,
+    pub(crate) tied_output: bool,
+    pub(crate) gdn_v_grouped: bool,
+}
+
+impl HadamardMeta {
+    pub(crate) fn from_gguf_metadata(
+        meta: &HashMap<String, gguf_file::Value>,
+    ) -> Result<Option<Self>> {
+        let prefix = if meta.contains_key("prism.hadamard.version") {
+            "prism.hadamard"
+        } else if meta.contains_key("zen.hadamard.version") {
+            "zen.hadamard"
+        } else {
+            return Ok(None);
+        };
+
+        let get_u32 = |suffix: &str| -> Result<u32> {
+            let key = format!("{prefix}.{suffix}");
+            match meta.get(&key) {
+                Some(gguf_file::Value::U32(v)) => Ok(*v),
+                Some(gguf_file::Value::I32(v)) if *v >= 0 => Ok(*v as u32),
+                Some(gguf_file::Value::U64(v)) => Ok(*v as u32),
+                Some(gguf_file::Value::I64(v)) if *v >= 0 => Ok(*v as u32),
+                Some(other) => hanzo_ml::bail!("Invalid type for `{key}`: {other:?}"),
+                None => hanzo_ml::bail!("Missing required Hadamard metadata key `{key}`"),
+            }
+        };
+        let get_opt_str = |suffix: &str| -> Result<Option<&str>> {
+            let key = format!("{prefix}.{suffix}");
+            match meta.get(&key) {
+                Some(gguf_file::Value::String(s)) => Ok(Some(s.as_str())),
+                Some(other) => hanzo_ml::bail!("Expected string for `{key}`, got {other:?}"),
+                None => Ok(None),
+            }
+        };
+        let get_opt_bool = |suffix: &str| -> Result<bool> {
+            let key = format!("{prefix}.{suffix}");
+            match meta.get(&key) {
+                Some(gguf_file::Value::Bool(b)) => Ok(*b),
+                Some(gguf_file::Value::U8(b)) => Ok(*b != 0),
+                Some(gguf_file::Value::I8(b)) => Ok(*b != 0),
+                Some(gguf_file::Value::U32(b)) => Ok(*b != 0),
+                Some(gguf_file::Value::I32(b)) => Ok(*b != 0),
+                Some(other) => hanzo_ml::bail!("Expected bool for `{key}`, got {other:?}"),
+                None => Ok(false),
+            }
+        };
+        let get_i32_arr = |suffix: &str| -> Result<Vec<i32>> {
+            let key = format!("{prefix}.{suffix}");
+            let Some(gguf_file::Value::Array(arr)) = meta.get(&key) else {
+                hanzo_ml::bail!("Missing or non-array Hadamard metadata key `{key}`");
+            };
+            arr.iter()
+                .map(|v| match v {
+                    gguf_file::Value::I32(x) => Ok(*x),
+                    gguf_file::Value::U32(x) => Ok(*x as i32),
+                    gguf_file::Value::I16(x) => Ok(i32::from(*x)),
+                    gguf_file::Value::U16(x) => Ok(i32::from(*x)),
+                    gguf_file::Value::I8(x) => Ok(i32::from(*x)),
+                    gguf_file::Value::U8(x) => Ok(i32::from(*x)),
+                    gguf_file::Value::I64(x) => Ok(*x as i32),
+                    gguf_file::Value::U64(x) => Ok(*x as i32),
+                    other => hanzo_ml::bail!("Non-integer element in `{key}`: {other:?}"),
+                })
+                .collect()
+        };
+        let get_str_set = |suffix: &str, required: bool| -> Result<HashSet<String>> {
+            let key = format!("{prefix}.{suffix}");
+            let Some(val) = meta.get(&key) else {
+                if required {
+                    hanzo_ml::bail!("Missing required Hadamard metadata key `{key}`");
+                }
+                return Ok(HashSet::new());
+            };
+            let gguf_file::Value::Array(arr) = val else {
+                hanzo_ml::bail!("Expected string array for `{key}`");
+            };
+            let mut set = HashSet::with_capacity(arr.len());
+            for item in arr {
+                let gguf_file::Value::String(s) = item else {
+                    hanzo_ml::bail!("Non-string element in `{key}`: {item:?}");
+                };
+                if !set.insert(s.clone()) {
+                    hanzo_ml::bail!("Duplicate weight entry `{s}` in `{key}`");
+                }
+            }
+            Ok(set)
+        };
+
+        let version = get_u32("version")?;
+        if version != 1 && version != 2 {
+            hanzo_ml::bail!("Unsupported `{prefix}.version`: {version} (expected 1 or 2)");
+        }
+        let block_size = get_u32("block_size")? as usize;
+        if block_size == 0 || !block_size.is_power_of_two() {
+            hanzo_ml::bail!("Invalid `{prefix}.block_size`: {block_size} (must be power of 2)");
+        }
+        if let Some(transform) = get_opt_str("transform")? {
+            if transform != "normalized-sylvester-walsh-hadamard" {
+                hanzo_ml::bail!("Unsupported `{prefix}.transform`: {transform}");
+            }
+        }
+        if let Some(axis) = get_opt_str("axis")? {
+            if axis != "input-last-dimension" {
+                hanzo_ml::bail!("Unsupported `{prefix}.axis`: {axis}");
+            }
+        }
+        let sign_mode = get_opt_str("sign_mode")?.unwrap_or("identity");
+        let explicit_signs = match sign_mode {
+            "identity" => false,
+            "explicit" => true,
+            other => hanzo_ml::bail!("Unsupported `{prefix}.sign_mode`: {other}"),
+        };
+
+        let mut signs = HashMap::new();
+        if explicit_signs {
+            let widths = get_i32_arr("sign_widths")?;
+            let values = get_i32_arr("sign_values")?;
+            if widths.is_empty() {
+                hanzo_ml::bail!("`{prefix}.sign_mode` is explicit but `sign_widths` is empty");
+            }
+            let mut offset = 0usize;
+            for w in widths {
+                if w <= 0 {
+                    hanzo_ml::bail!("Invalid Hadamard sign width: {w}");
+                }
+                let width = w as usize;
+                if !width.is_multiple_of(block_size) || offset + width > values.len() {
+                    hanzo_ml::bail!(
+                        "Invalid Hadamard sign width {width} for block_size {block_size} (values len {})",
+                        values.len()
+                    );
+                }
+                let mut vec_f32 = Vec::with_capacity(width);
+                for &sv in &values[offset..offset + width] {
+                    if sv != 1 && sv != -1 {
+                        hanzo_ml::bail!("Hadamard sign values must be +/-1, got {sv}");
+                    }
+                    vec_f32.push(sv as f32);
+                }
+                signs.insert(width, vec_f32);
+                offset += width;
+            }
+            if offset != values.len() {
+                hanzo_ml::bail!(
+                    "`{prefix}.sign_values` length mismatch: consumed {offset}, total {}",
+                    values.len()
+                );
+            }
+        }
+
+        let weight_names = get_str_set("weight_names", true)?;
+        if weight_names.is_empty() {
+            hanzo_ml::bail!("`{prefix}.weight_names` is empty");
+        }
+        let inverse_weight_names = get_str_set("inverse_weight_names", false)?;
+        for name in &inverse_weight_names {
+            if name != "token_embd.weight" {
+                hanzo_ml::bail!(
+                    "`{prefix}.inverse_weight_names` entry `{name}` is not a supported inverse table"
+                );
+            }
+        }
+        let tied_output = get_opt_bool("tied_output")?;
+        let gdn_v_grouped = get_opt_bool("gdn_v_grouped")?;
+
+        Ok(Some(Self {
+            block_size,
+            explicit_signs,
+            signs,
+            weight_names,
+            inverse_weight_names,
+            tied_output,
+            gdn_v_grouped,
+        }))
+    }
+
+    #[inline]
+    pub(crate) fn is_folded(&self, weight_name: &str) -> bool {
+        self.weight_names.contains(weight_name)
+    }
+
+    #[inline]
+    pub(crate) fn is_inverse(&self, weight_name: &str) -> bool {
+        self.inverse_weight_names.contains(weight_name)
+    }
+}
+
+/// Precomputed normalized Sylvester-Walsh-Hadamard operator `H_B` + per-width `±1` signs on one `Device`.
+pub(crate) struct DeviceHadamard {
+    block_size: usize,
+    explicit_signs: bool,
+    h_b: Tensor,
+    signs: HashMap<usize, Tensor>,
+}
+
+impl DeviceHadamard {
+    pub(crate) fn new(meta: &HadamardMeta, device: &Device) -> Result<Self> {
+        let b = meta.block_size;
+        let scale = 1.0f32 / (b as f32).sqrt();
+        let mut h_data = vec![0.0f32; b * b];
+        for r in 0..b {
+            let row = &mut h_data[r * b..(r + 1) * b];
+            for (c, slot) in row.iter_mut().enumerate() {
+                *slot = if ((r & c).count_ones() & 1) == 0 {
+                    scale
+                } else {
+                    -scale
+                };
+            }
+        }
+        let h_b = Tensor::from_vec(h_data, (b, b), device)?;
+        let mut signs = HashMap::with_capacity(meta.signs.len());
+        for (&width, vals) in &meta.signs {
+            signs.insert(width, Tensor::from_vec(vals.clone(), width, device)?);
+        }
+        Ok(Self {
+            block_size: b,
+            explicit_signs: meta.explicit_signs,
+            h_b,
+            signs,
+        })
+    }
+
+    /// Forward activation fold `T(x) = ((x * signs).reshape(-1, B) @ H_B).reshape_as(x)`.
+    pub(crate) fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let orig_dtype = x.dtype();
+        let orig_shape = x.shape().clone();
+        let Some(&width) = orig_shape.dims().last() else {
+            hanzo_ml::bail!("Hadamard forward expects rank >= 1");
+        };
+        if !width.is_multiple_of(self.block_size) {
+            hanzo_ml::bail!(
+                "Hadamard forward width {width} is not divisible by block_size {}",
+                self.block_size
+            );
+        }
+        let xf = if orig_dtype == DType::F32 {
+            x.clone()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
+        let xf = if let Some(s) = self.signs.get(&width) {
+            xf.broadcast_mul(s)?
+        } else if self.explicit_signs {
+            hanzo_ml::bail!("Missing Hadamard sign vector for width {width}");
+        } else {
+            xf
+        };
+        let rows = orig_shape.elem_count() / self.block_size;
+        let out = xf
+            .reshape((rows, self.block_size))?
+            .matmul(&self.h_b)?
+            .reshape(orig_shape)?;
+        if orig_dtype == DType::F32 {
+            Ok(out)
+        } else {
+            out.to_dtype(orig_dtype)
+        }
+    }
+
+    /// Inverse lookup fold `T^{-1}(u) = (u.reshape(-1, B) @ H_B).reshape_as(u) * signs`.
+    pub(crate) fn inverse(&self, u: &Tensor) -> Result<Tensor> {
+        let orig_dtype = u.dtype();
+        let orig_shape = u.shape().clone();
+        let Some(&width) = orig_shape.dims().last() else {
+            hanzo_ml::bail!("Hadamard inverse expects rank >= 1");
+        };
+        if !width.is_multiple_of(self.block_size) {
+            hanzo_ml::bail!(
+                "Hadamard inverse width {width} is not divisible by block_size {}",
+                self.block_size
+            );
+        }
+        let uf = if orig_dtype == DType::F32 {
+            u.clone()
+        } else {
+            u.to_dtype(DType::F32)?
+        };
+        let rows = orig_shape.elem_count() / self.block_size;
+        let out = uf
+            .reshape((rows, self.block_size))?
+            .matmul(&self.h_b)?
+            .reshape(orig_shape)?;
+        let out = if let Some(s) = self.signs.get(&width) {
+            out.broadcast_mul(s)?
+        } else if self.explicit_signs {
+            hanzo_ml::bail!("Missing Hadamard sign vector for width {width}");
+        } else {
+            out
+        };
+        if orig_dtype == DType::F32 {
+            Ok(out)
+        } else {
+            out.to_dtype(orig_dtype)
+        }
+    }
+}
+
+/// Token embedding table keeping quantized rows resident on CPU/CUDA/Metal instead of expanding
+/// large vocab tables (e.g. 248,320 x 5,120 = 5.08 GB F32 on 27B) on load.
+#[derive(Clone)]
+enum TokEmbedding {
+    Dense(Embedding),
+    Quantized(Arc<QTensor>),
+}
+
+impl TokEmbedding {
+    fn from_gguf_qtensor(q: Arc<QTensor>, hidden_size: usize, device: &Device) -> Result<Self> {
+        let can_gather_quantized =
+            matches!(device, Device::Cpu | Device::Cuda(_) | Device::Metal(_))
+                && hidden_size.is_multiple_of(q.dtype().block_size());
+        if can_gather_quantized {
+            Ok(Self::Quantized(q))
+        } else {
+            Ok(Self::Dense(Embedding::new(
+                q.dequantize(device)?,
+                hidden_size,
+            )))
+        }
+    }
+
+    fn forward(&self, ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(e) => e.forward(ids),
+            Self::Quantized(q) => q.embedding(ids),
+        }
+    }
+
+    fn dtype(&self) -> DType {
+        match self {
+            Self::Dense(e) => e.embeddings().dtype(),
+            Self::Quantized(_) => DType::F32,
+        }
+    }
 }
 
 // ===================== MoE / dense FFN =====================
@@ -134,6 +481,12 @@ pub(crate) struct FusedMoe {
     /// The dtype router logits are rounded to before the f32 softmax: F32 for GGUF, the
     /// activation dtype (bf16) for the served bf16 router GEMM.
     router_dtype: DType,
+    gate_exps_had: Option<Arc<DeviceHadamard>>,
+    up_exps_had: Option<Arc<DeviceHadamard>>,
+    down_exps_had: Option<Arc<DeviceHadamard>>,
+    shexp_gate_had: Option<Arc<DeviceHadamard>>,
+    shexp_up_had: Option<Arc<DeviceHadamard>>,
+    shexp_down_had: Option<Arc<DeviceHadamard>>,
 }
 
 /// `silu(g) · u` in f32 with one rounding to `dtype` (`triton_poi_fused_mul_silu_slice_0`, and
@@ -183,7 +536,32 @@ impl FusedMoe {
             norm_topk_prob: true,
             num_experts_per_tok,
             router_dtype: DType::F32,
+            gate_exps_had: None,
+            up_exps_had: None,
+            down_exps_had: None,
+            shexp_gate_had: None,
+            shexp_up_had: None,
+            shexp_down_had: None,
         })
+    }
+
+    pub(crate) fn with_hadamard(
+        mut self,
+        had: &Arc<DeviceHadamard>,
+        meta: &HadamardMeta,
+        prefix: &str,
+    ) -> Self {
+        let pick = |suffix: &str| {
+            meta.is_folded(&format!("{prefix}.{suffix}"))
+                .then(|| Arc::clone(had))
+        };
+        self.gate_exps_had = pick("ffn_gate_exps.weight");
+        self.up_exps_had = pick("ffn_up_exps.weight");
+        self.down_exps_had = pick("ffn_down_exps.weight");
+        self.shexp_gate_had = pick("ffn_gate_shexp.weight");
+        self.shexp_up_had = pick("ffn_up_shexp.weight");
+        self.shexp_down_had = pick("ffn_down_shexp.weight");
+        self
     }
 
     /// The MoE block at `vb` (`...mlp`) of a safetensors checkpoint: a bf16 router `gate`
@@ -261,6 +639,12 @@ impl FusedMoe {
             norm_topk_prob: true,
             num_experts_per_tok: props.num_experts_per_tok,
             router_dtype: dtype,
+            gate_exps_had: None,
+            up_exps_had: None,
+            down_exps_had: None,
+            shexp_gate_had: None,
+            shexp_up_had: None,
+            shexp_down_had: None,
         })
     }
 
@@ -288,20 +672,56 @@ impl FusedMoe {
 
     /// The routed experts over `xs` `[t, h]` for `ids`/`weights` `[t, k]`: `[t, h]` in `xs`'s dtype.
     pub(crate) fn experts(&self, xs: &Tensor, ids: &Tensor, weights: &Tensor) -> Result<Tensor> {
+        let xs_rot = match self.gate_exps_had.as_ref().or(self.up_exps_had.as_ref()) {
+            Some(had) => Some(had.forward(xs)?),
+            None => None,
+        };
+        self.experts_with_rot(xs, xs_rot.as_ref(), ids, weights)
+    }
+
+    fn experts_with_rot(
+        &self,
+        xs: &Tensor,
+        xs_rot: Option<&Tensor>,
+        ids: &Tensor,
+        weights: &Tensor,
+    ) -> Result<Tensor> {
         let (num_tokens, hidden_dim) = xs.dims2()?;
         let xs_e = xs.reshape((num_tokens, 1, hidden_dim))?;
+        let xs_rot_e = match xs_rot {
+            Some(r) => Some(r.reshape((num_tokens, 1, hidden_dim))?),
+            None => None,
+        };
+        let gate_in = if self.gate_exps_had.is_some() {
+            xs_rot_e.as_ref().unwrap()
+        } else {
+            &xs_e
+        };
+        let up_in = if self.up_exps_had.is_some() {
+            xs_rot_e.as_ref().unwrap()
+        } else {
+            &xs_e
+        };
         let routed = match &self.banks {
             Banks::Gguf([gate, up, down]) => {
-                let g = gate.indexed_moe_forward(&xs_e, ids)?;
-                let u = up.indexed_moe_forward(&xs_e, ids)?;
+                let g = gate.indexed_moe_forward(gate_in, ids)?;
+                let u = up.indexed_moe_forward(up_in, ids)?;
                 let act = crate::ops::mul_and_act(&g, &u, crate::layers::Activation::Silu)?;
+                let act = match &self.down_exps_had {
+                    Some(had) => had.forward(&act)?,
+                    None => act,
+                };
                 down.indexed_moe_forward(&act, ids)?
             }
             Banks::Quant([gate, up, down]) => {
                 let ids = ids.to_dtype(DType::U32)?;
-                let g = gate.gather_forward(&xs_e, &ids)?;
-                let u = up.gather_forward(&xs_e, &ids)?;
+                let g = gate.gather_forward(gate_in, &ids)?;
+                let u = up.gather_forward(up_in, &ids)?;
                 let act = swiglu_rounded(&g, &u, xs.dtype())?;
+                let act = match &self.down_exps_had {
+                    Some(had) => had.forward(&act)?,
+                    None => act,
+                };
                 down.gather_forward(&act, &ids)?
             }
         };
@@ -320,11 +740,33 @@ impl FusedMoe {
 
     /// The sigmoid-gated shared expert over `xs` `[t, h]`.
     pub(crate) fn shared(&self, xs: &Tensor) -> Result<Tensor> {
-        let g = self.shared_gate_proj.forward(xs)?;
-        let u = self.shared_up_proj.forward(xs)?;
+        let xs_rot = match self.shexp_gate_had.as_ref().or(self.shexp_up_had.as_ref()) {
+            Some(had) => Some(had.forward(xs)?),
+            None => None,
+        };
+        self.shared_with_rot(xs, xs_rot.as_ref())
+    }
+
+    fn shared_with_rot(&self, xs: &Tensor, xs_rot: Option<&Tensor>) -> Result<Tensor> {
+        let gate_in = if self.shexp_gate_had.is_some() {
+            xs_rot.unwrap()
+        } else {
+            xs
+        };
+        let up_in = if self.shexp_up_had.is_some() {
+            xs_rot.unwrap()
+        } else {
+            xs
+        };
+        let g = self.shared_gate_proj.forward(gate_in)?;
+        let u = self.shared_up_proj.forward(up_in)?;
         if self.router_dtype == DType::F32 {
             // GGUF: matching qwen3_next SparseMoeBlock.
             let act = crate::ops::mul_and_act(&g, &u, crate::layers::Activation::Silu)?;
+            let act = match &self.shexp_down_had {
+                Some(had) => had.forward(&act)?,
+                None => act,
+            };
             let out = self.shared_down_proj.forward(&act)?;
             let gate = sigmoid(&self.shared_gate.forward(&xs.to_dtype(DType::F32)?)?)?
                 .to_dtype(out.dtype())?;
@@ -334,6 +776,10 @@ impl FusedMoe {
         // expert each rounded, as the eager module inside moe_forward_shared computes them.
         let dtype = xs.dtype();
         let act = swiglu_rounded(&g.to_dtype(dtype)?, &u.to_dtype(dtype)?, dtype)?;
+        let act = match &self.shexp_down_had {
+            Some(had) => had.forward(&act)?,
+            None => act,
+        };
         let out = self.shared_down_proj.forward(&act)?.to_dtype(dtype)?;
         let gate =
             sigmoid(&self.shared_gate.forward(xs)?.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
@@ -344,9 +790,19 @@ impl FusedMoe {
         let (batch, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
         let original_dtype = xs.dtype();
+        let xs_rot = match self
+            .gate_exps_had
+            .as_ref()
+            .or(self.up_exps_had.as_ref())
+            .or(self.shexp_gate_had.as_ref())
+            .or(self.shexp_up_had.as_ref())
+        {
+            Some(had) => Some(had.forward(&xs)?),
+            None => None,
+        };
         let (ids, weights) = self.route(&self.logits(&xs)?)?;
-        let routed = self.experts(&xs, &ids, &weights)?;
-        let shared = self.shared(&xs)?;
+        let routed = self.experts_with_rot(&xs, xs_rot.as_ref(), &ids, &weights)?;
+        let shared = self.shared_with_rot(&xs, xs_rot.as_ref())?;
         let out = if self.router_dtype == DType::F32 {
             (routed + shared)?
         } else {
@@ -362,6 +818,9 @@ pub(crate) struct DenseMlp {
     gate: Arc<dyn QuantMethod>,
     up: Arc<dyn QuantMethod>,
     down: Arc<dyn QuantMethod>,
+    gate_had: Option<Arc<DeviceHadamard>>,
+    up_had: Option<Arc<DeviceHadamard>>,
+    down_had: Option<Arc<DeviceHadamard>>,
 }
 
 impl DenseMlp {
@@ -374,13 +833,50 @@ impl DenseMlp {
             gate: gguf_qmm(ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?)?,
             up: gguf_qmm(ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?)?,
             down: gguf_qmm(ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?)?,
+            gate_had: None,
+            up_had: None,
+            down_had: None,
         })
     }
 
+    pub(crate) fn with_hadamard(
+        mut self,
+        had: &Arc<DeviceHadamard>,
+        meta: &HadamardMeta,
+        prefix: &str,
+    ) -> Self {
+        let pick = |suffix: &str| {
+            meta.is_folded(&format!("{prefix}.{suffix}"))
+                .then(|| Arc::clone(had))
+        };
+        self.gate_had = pick("ffn_gate.weight");
+        self.up_had = pick("ffn_up.weight");
+        self.down_had = pick("ffn_down.weight");
+        self
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate.forward(xs)?;
-        let up = self.up.forward(xs)?;
+        let xs_rot = match self.gate_had.as_ref().or(self.up_had.as_ref()) {
+            Some(had) => Some(had.forward(xs)?),
+            None => None,
+        };
+        let gate_in = if self.gate_had.is_some() {
+            xs_rot.as_ref().unwrap()
+        } else {
+            xs
+        };
+        let up_in = if self.up_had.is_some() {
+            xs_rot.as_ref().unwrap()
+        } else {
+            xs
+        };
+        let gate = self.gate.forward(gate_in)?;
+        let up = self.up.forward(up_in)?;
         let y = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+        let y = match &self.down_had {
+            Some(had) => had.forward(&y)?,
+            None => y,
+        };
         self.down.forward(&y)
     }
 }
@@ -418,6 +914,10 @@ pub(crate) struct GatedFullAttention {
     dtype: DType,
     /// Attend with the QSA kernel's math (zen6) instead of SDPA.
     qsa: bool,
+    q_had: Option<Arc<DeviceHadamard>>,
+    k_had: Option<Arc<DeviceHadamard>>,
+    v_had: Option<Arc<DeviceHadamard>>,
+    o_had: Option<Arc<DeviceHadamard>>,
 }
 
 impl GatedFullAttention {
@@ -476,12 +976,33 @@ impl GatedFullAttention {
             },
             dtype,
             qsa: true,
+            q_had: None,
+            k_had: None,
+            v_had: None,
+            o_had: None,
         })
     }
 
     /// Attend with the QSA kernel's math (zen6's attention in both formats).
     pub(crate) fn qsa(self) -> Self {
         Self { qsa: true, ..self }
+    }
+
+    pub(crate) fn with_hadamard(
+        mut self,
+        had: &Arc<DeviceHadamard>,
+        meta: &HadamardMeta,
+        prefix: &str,
+    ) -> Self {
+        let pick = |suffix: &str| {
+            meta.is_folded(&format!("{prefix}.{suffix}"))
+                .then(|| Arc::clone(had))
+        };
+        self.q_had = pick("attn_q.weight");
+        self.k_had = pick("attn_k.weight");
+        self.v_had = pick("attn_v.weight");
+        self.o_had = pick("attn_output.weight");
+        self
     }
 
     /// The attention of one full-attention block at `prefix`. `paged_attn` is `None` for a block
@@ -523,6 +1044,10 @@ impl GatedFullAttention {
             },
             dtype,
             qsa: false,
+            q_had: None,
+            k_had: None,
+            v_had: None,
+            o_had: None,
         })
     }
 
@@ -578,9 +1103,34 @@ impl GatedFullAttention {
     ) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let q_gate = self.attn_q.forward(x)?;
-        let k = self.attn_k.forward(x)?;
-        let v = self.attn_v.forward(x)?;
+        let x_rot = match self
+            .q_had
+            .as_ref()
+            .or(self.k_had.as_ref())
+            .or(self.v_had.as_ref())
+        {
+            Some(had) => Some(had.forward(x)?),
+            None => None,
+        };
+        let q_in = if self.q_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+        let k_in = if self.k_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+        let v_in = if self.v_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+
+        let q_gate = self.attn_q.forward(q_in)?;
+        let k = self.attn_k.forward(k_in)?;
+        let v = self.attn_v.forward(v_in)?;
 
         // Split q_gate into q and gate (interleaved per head: [q_head, gate_head] * n_head).
         let q_gate = q_gate.reshape((b_sz, seq_len, self.n_head, self.head_dim * 2))?;
@@ -693,6 +1243,10 @@ impl GatedFullAttention {
     pub(crate) fn output(&self, y: &Tensor, gate: &Tensor, dtype: DType) -> Result<Tensor> {
         let gate = sigmoid(&gate.to_dtype(DType::F32)?)?;
         let y = y.to_dtype(DType::F32)?.broadcast_mul(&gate)?;
+        let y = match &self.o_had {
+            Some(had) => had.forward(&y)?,
+            None => y,
+        };
         self.attn_o.forward(&y)?.to_dtype(dtype)
     }
 }
@@ -716,6 +1270,12 @@ pub(crate) struct QGatedDeltaNet {
     conv_kernel_size: usize,
     key_dim: usize,
     value_dim: usize,
+    qkv_had: Option<Arc<DeviceHadamard>>,
+    z_had: Option<Arc<DeviceHadamard>>,
+    b_had: Option<Arc<DeviceHadamard>>,
+    a_had: Option<Arc<DeviceHadamard>>,
+    out_had: Option<Arc<DeviceHadamard>>,
+    out_v_grouped: bool,
 }
 
 /// Rows produced by the conv state spliced onto the left of a continuation are context, not output.
@@ -783,7 +1343,32 @@ impl QGatedDeltaNet {
             conv_kernel_size: props.conv_kernel,
             key_dim: props.num_k_heads * props.head_k_dim,
             value_dim: props.num_v_heads * props.head_v_dim,
+            qkv_had: None,
+            z_had: None,
+            b_had: None,
+            a_had: None,
+            out_had: None,
+            out_v_grouped: false,
         })
+    }
+
+    pub(crate) fn with_hadamard(
+        mut self,
+        had: &Arc<DeviceHadamard>,
+        meta: &HadamardMeta,
+        prefix: &str,
+    ) -> Self {
+        let pick = |suffix: &str| {
+            meta.is_folded(&format!("{prefix}.{suffix}"))
+                .then(|| Arc::clone(had))
+        };
+        self.qkv_had = pick("attn_qkv.weight");
+        self.z_had = pick("attn_gate.weight");
+        self.b_had = pick("ssm_beta.weight");
+        self.a_had = pick("ssm_alpha.weight");
+        self.out_had = pick("ssm_out.weight");
+        self.out_v_grouped = self.out_had.is_some() && meta.gdn_v_grouped;
+        self
     }
 
     /// The GDN block at `vb` (`...linear_attn`) of a safetensors checkpoint, in the tiled V-head
@@ -899,6 +1484,12 @@ impl QGatedDeltaNet {
             conv_kernel_size: props.conv_kernel,
             key_dim,
             value_dim,
+            qkv_had: None,
+            z_had: None,
+            b_had: None,
+            a_had: None,
+            out_had: None,
+            out_v_grouped: false,
         })
     }
 
@@ -937,10 +1528,40 @@ impl QGatedDeltaNet {
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
         // 1-2. Projections: qkv is merged [q | k | v]; z is the gate; b and a are bf16 GEMMs.
-        let mixed_qkv = store(self.in_proj_qkv.forward(x)?)?;
-        let z = store(self.in_proj_z.forward(x)?)?;
-        let b = store(self.in_proj_b.forward(x)?)?;
-        let a = store(self.in_proj_a.forward(x)?)?;
+        let x_rot = match self
+            .qkv_had
+            .as_ref()
+            .or(self.z_had.as_ref())
+            .or(self.b_had.as_ref())
+            .or(self.a_had.as_ref())
+        {
+            Some(had) => Some(had.forward(x)?),
+            None => None,
+        };
+        let qkv_in = if self.qkv_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+        let z_in = if self.z_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+        let b_in = if self.b_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+        let a_in = if self.a_had.is_some() {
+            x_rot.as_ref().unwrap()
+        } else {
+            x
+        };
+        let mixed_qkv = store(self.in_proj_qkv.forward(qkv_in)?)?;
+        let z = store(self.in_proj_z.forward(z_in)?)?;
+        let b = store(self.in_proj_b.forward(b_in)?)?;
+        let a = store(self.in_proj_a.forward(a_in)?)?;
 
         let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
         let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
@@ -1051,6 +1672,28 @@ impl QGatedDeltaNet {
             .reshape(z_shape)?
             .reshape((batch_size, seq_len, self.value_dim))?;
         note("normed", &y);
+
+        // When `ssm_out.weight` was Hadamard-folded in HF grouped V-head order (`gdn_v_grouped`),
+        // transpose tiled `[batch, seq, v_per_group, num_k_heads, head_v_dim]` back to grouped
+        // `[batch, seq, num_k_heads, v_per_group, head_v_dim]` before `signs` + `H_B`.
+        let y = if self.out_v_grouped && v_per_group > 1 {
+            y.reshape((
+                batch_size,
+                seq_len,
+                v_per_group,
+                self.num_k_heads,
+                self.head_v_dim,
+            ))?
+            .transpose(2, 3)?
+            .contiguous()?
+            .reshape((batch_size, seq_len, self.value_dim))?
+        } else {
+            y
+        };
+        let y = match &self.out_had {
+            Some(had) => had.forward(&y)?,
+            None => y,
+        };
 
         self.out_proj.forward(&y)?.to_dtype(rd)
     }
@@ -1471,11 +2114,13 @@ impl PropsGGUF {
 // ===================== Model =====================
 
 pub struct ModelWeights {
-    tok_embeddings: Embedding,
+    tok_embeddings: TokEmbedding,
+    embed_hadamard: Option<Arc<DeviceHadamard>>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
     norm: QRmsNorm,
     output: Arc<dyn QuantMethod>,
+    output_hadamard: Option<Arc<DeviceHadamard>>,
     rotary: Arc<Qwen3VLRotaryEmbedding>,
     pub device: Device,
     pub cache: EitherCache,
@@ -1500,9 +2145,13 @@ pub(crate) struct SpecRows {
     pub(crate) positions: Vec<Vec<usize>>,
 }
 
-pub(crate) fn gguf_qmm(q: hanzo_ml::quantized::QTensor) -> Result<Arc<dyn QuantMethod>> {
+pub(crate) fn gguf_qmm(q: QTensor) -> Result<Arc<dyn QuantMethod>> {
+    gguf_qmm_arc(Arc::new(q))
+}
+
+fn gguf_qmm_arc(q_weight: Arc<QTensor>) -> Result<Arc<dyn QuantMethod>> {
     Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-        q_weight: Arc::new(q),
+        q_weight,
         b: None,
     })?))
 }
@@ -1518,6 +2167,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let meta = ct.get_metadata();
         let actual_arch = verify_arch(meta, &["qwen35moe", "qwen35"])?;
         let is_moe = actual_arch == "qwen35moe";
+        let hadamard_meta = HadamardMeta::from_gguf_metadata(meta)?;
 
         let metadata = ContentMetadata {
             path_prefix: &actual_arch,
@@ -1550,13 +2200,51 @@ impl ModelConfig::FromGGUF for ModelWeights {
             })
             .collect();
 
-        let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
-        let tok_embeddings = qtok_embeddings.dequantize(device)?;
+        // Precompute one `DeviceHadamard` per device location when Hadamard metadata is present.
+        let mut hadamards = HashMap::new();
+        if let Some(ref hm) = hadamard_meta {
+            hadamards.insert(
+                device.location(),
+                Arc::new(DeviceHadamard::new(hm, device)?),
+            );
+            for layer_idx in 0..props.block_count {
+                let dev = mapper.device_for(layer_idx, false).unwrap_or(device);
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    hadamards.entry(dev.location())
+                {
+                    e.insert(Arc::new(DeviceHadamard::new(hm, dev)?));
+                }
+            }
+        }
+
+        let has_output_weight = ct.has_tensor("output.weight");
+        let qtok_embeddings = Arc::new(ct.tensor("token_embd.weight", device)?);
+        let tok_embeddings = TokEmbedding::from_gguf_qtensor(
+            Arc::clone(&qtok_embeddings),
+            props.embedding_length,
+            device,
+        )?;
         let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, props.rms_norm_eps)?;
-        let output = if ct.has_tensor("output.weight") {
-            ct.tensor("output.weight", device)?
+        let output = if has_output_weight {
+            gguf_qmm(ct.tensor("output.weight", device)?)?
         } else {
-            ct.tensor("token_embd.weight", device)?
+            gguf_qmm_arc(qtok_embeddings)?
+        };
+
+        let (embed_hadamard, output_hadamard) = match &hadamard_meta {
+            Some(hm) => {
+                let dev_had = hadamards
+                    .get(&device.location())
+                    .expect("Hadamard initialized for root device");
+                let emb_had = hm
+                    .is_inverse("token_embd.weight")
+                    .then(|| Arc::clone(dev_had));
+                let out_folded =
+                    hm.is_folded("output.weight") || (!has_output_weight && hm.tied_output);
+                let out_had = out_folded.then(|| Arc::clone(dev_had));
+                (emb_had, out_had)
+            }
+            None => (None, None),
         };
 
         // One mRoPE per device location. head_dim arg = rot_dim so cos/sin width = rot_dim/2.
@@ -1589,6 +2277,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 .get(&dev.location())
                 .expect("No RoPE for device location!")
                 .clone();
+            let layer_had = hadamard_meta
+                .as_ref()
+                .map(|hm| (hadamards.get(&dev.location()).unwrap(), hm));
 
             let input_layernorm = QRmsNorm::new(
                 ct.tensor(&format!("{prefix}.attn_norm.weight"), dev)?,
@@ -1607,24 +2298,36 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         }
                         AttentionImplementation::Eager => None,
                     };
-                    LayerImpl::FullAttention(GatedFullAttention::load(
+                    let mut attn = GatedFullAttention::load(
                         &mut ct, &prefix, &props, rotary, paged_attn, dev, dtype,
-                    )?)
+                    )?;
+                    if let Some((had, hm)) = layer_had {
+                        attn = attn.with_hadamard(had, hm, &prefix);
+                    }
+                    LayerImpl::FullAttention(attn)
                 }
                 LayerType::LinearAttention => {
-                    LayerImpl::LinearAttention(QGatedDeltaNet::load(&mut ct, &prefix, &props, dev)?)
+                    let mut gdn = QGatedDeltaNet::load(&mut ct, &prefix, &props, dev)?;
+                    if let Some((had, hm)) = layer_had {
+                        gdn = gdn.with_hadamard(had, hm, &prefix);
+                    }
+                    LayerImpl::LinearAttention(gdn)
                 }
             };
 
             let mlp = if is_moe {
-                MoeOrMlp::FusedMoe(Box::new(FusedMoe::from_gguf(
-                    &mut ct,
-                    &prefix,
-                    dev,
-                    props.num_experts_per_tok,
-                )?))
+                let mut moe =
+                    FusedMoe::from_gguf(&mut ct, &prefix, dev, props.num_experts_per_tok)?;
+                if let Some((had, hm)) = layer_had {
+                    moe = moe.with_hadamard(had, hm, &prefix);
+                }
+                MoeOrMlp::FusedMoe(Box::new(moe))
             } else {
-                MoeOrMlp::Mlp(DenseMlp::load(&mut ct, &prefix, dev)?)
+                let mut dense = DenseMlp::load(&mut ct, &prefix, dev)?;
+                if let Some((had, hm)) = layer_had {
+                    dense = dense.with_hadamard(had, hm, &prefix);
+                }
+                MoeOrMlp::Mlp(dense)
             };
 
             layers.push(DecoderLayer {
@@ -1660,11 +2363,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
         ));
 
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, props.embedding_length),
+            tok_embeddings,
+            embed_hadamard,
             layers,
             layer_types,
             norm,
-            output: gguf_qmm(output)?,
+            output,
+            output_hadamard,
             rotary: default_rotary,
             device: device.clone(),
             cache: EitherCache::Hybrid(pipeline_cache),
@@ -1690,6 +2395,9 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.dims2()?;
         let mut x = self.tok_embeddings.forward(input_ids)?;
+        if let Some(ref had) = self.embed_hadamard {
+            x = had.inverse(&x)?;
+        }
 
         let mut hybrid_cache = self.cache.hybrid();
         let trail = hybrid_cache.records_trail(x.dim(1)?);
@@ -1863,6 +2571,10 @@ impl ModelWeights {
                 });
             }
         }
+        let x = match &self.output_hadamard {
+            Some(had) => had.forward(&x)?,
+            None => x,
+        };
         self.output.forward(&x.contiguous()?)
     }
 
@@ -1903,12 +2615,25 @@ impl ModelWeights {
     /// residual stream's dtype, which is the embedding's.
     pub(crate) fn shared_heads(&self) -> crate::speculative::SpeculativeSharedHeads {
         let embed_tokens = self.tok_embeddings.clone();
+        let embed_had = self.embed_hadamard.clone();
         let output = Arc::clone(&self.output);
-        let dtype = self.tok_embeddings.embeddings().dtype();
+        let output_had = self.output_hadamard.clone();
+        let dtype = self.tok_embeddings.dtype();
         crate::speculative::SpeculativeSharedHeads {
-            embed: Arc::new(move |ids: &Tensor| embed_tokens.forward(ids)),
+            embed: Arc::new(move |ids: &Tensor| {
+                let z = embed_tokens.forward(ids)?;
+                match &embed_had {
+                    Some(had) => had.inverse(&z),
+                    None => Ok(z),
+                }
+            }),
             lm_head: Arc::new(move |hidden: &Tensor| {
-                output.forward(&hidden.to_dtype(dtype)?.contiguous()?)
+                let h = hidden.to_dtype(dtype)?;
+                let h = match &output_had {
+                    Some(had) => had.forward(&h)?,
+                    None => h,
+                };
+                output.forward(&h.contiguous()?)
             }),
         }
     }
@@ -2360,6 +3085,106 @@ mod tests {
                 .to_vec1::<f64>()?;
             check("gdn", at, &got, &want, 1e-5);
             at += len;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hadamard_meta_and_folded_linear_equivalence() -> Result<()> {
+        let dev = Device::Cpu;
+        for prefix in ["prism.hadamard", "zen.hadamard"] {
+            let mut kv = HashMap::new();
+            kv.insert(
+                format!("{prefix}.version"),
+                gguf_file::Value::U32(if prefix == "prism.hadamard" { 1 } else { 2 }),
+            );
+            kv.insert(format!("{prefix}.block_size"), gguf_file::Value::U32(8));
+            kv.insert(
+                format!("{prefix}.transform"),
+                gguf_file::Value::String("normalized-sylvester-walsh-hadamard".to_string()),
+            );
+            kv.insert(
+                format!("{prefix}.axis"),
+                gguf_file::Value::String("input-last-dimension".to_string()),
+            );
+            kv.insert(
+                format!("{prefix}.sign_mode"),
+                gguf_file::Value::String("explicit".to_string()),
+            );
+            kv.insert(
+                format!("{prefix}.sign_widths"),
+                gguf_file::Value::Array(vec![gguf_file::Value::I32(16)]),
+            );
+            let mut rng = StdRng::seed_from_u64(0x4841_4441);
+            let signs_i32: Vec<i32> = (0..16)
+                .map(|_| if rng.random_bool(0.5) { 1 } else { -1 })
+                .collect();
+            kv.insert(
+                format!("{prefix}.sign_values"),
+                gguf_file::Value::Array(
+                    signs_i32
+                        .iter()
+                        .copied()
+                        .map(gguf_file::Value::I32)
+                        .collect(),
+                ),
+            );
+            kv.insert(
+                format!("{prefix}.weight_names"),
+                gguf_file::Value::Array(vec![gguf_file::Value::String(
+                    "blk.0.ffn_gate.weight".to_string(),
+                )]),
+            );
+            kv.insert(
+                format!("{prefix}.inverse_weight_names"),
+                gguf_file::Value::Array(vec![gguf_file::Value::String(
+                    "token_embd.weight".to_string(),
+                )]),
+            );
+            kv.insert(
+                format!("{prefix}.tied_output"),
+                gguf_file::Value::Bool(prefix == "zen.hadamard"),
+            );
+            kv.insert(
+                format!("{prefix}.gdn_v_grouped"),
+                gguf_file::Value::Bool(true),
+            );
+
+            let hm = HadamardMeta::from_gguf_metadata(&kv)?.expect("parsed hadamard");
+            assert_eq!(hm.block_size, 8);
+            assert!(hm.is_folded("blk.0.ffn_gate.weight"));
+            assert!(hm.is_inverse("token_embd.weight"));
+            assert_eq!(hm.tied_output, prefix == "zen.hadamard");
+            assert!(hm.gdn_v_grouped);
+
+            let had = DeviceHadamard::new(&hm, &dev)?;
+            // 1) Roundtrip T^{-1}(T(x)) == x on 3D activations [2, 3, 16]
+            let x_data: Vec<f32> = (0..2 * 3 * 16)
+                .map(|_| rng.random_range(-1f32..1.0))
+                .collect();
+            let x = Tensor::from_vec(x_data.clone(), (2, 3, 16), &dev)?;
+            let x_rt = had.inverse(&had.forward(&x)?)?;
+            let got_rt = x_rt.flatten_all()?.to_vec1::<f32>()?;
+            let want_rt: Vec<f64> = x_data.iter().map(|&v| f64::from(v)).collect();
+            check("hadamard_roundtrip", 0, &got_rt, &want_rt, 1e-5);
+
+            // 2) Folded linear equivalence: T(x) @ T(W)^T == x @ W^T
+            let w_data: Vec<f32> = (0..10 * 16).map(|_| rng.random_range(-1f32..1.0)).collect();
+            let w = Tensor::from_vec(w_data, (10, 16), &dev)?;
+            let w_rot = had.forward(&w)?;
+            let x_2d = x.reshape((6, 16))?;
+            let y_primal = x_2d
+                .matmul(&w.t()?)?
+                .flatten_all()?
+                .to_dtype(DType::F64)?
+                .to_vec1::<f64>()?;
+            let y_folded = had
+                .forward(&x)?
+                .reshape((6, 16))?
+                .matmul(&w_rot.t()?)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            check("hadamard_linear", 0, &y_folded, &y_primal, 1e-5);
         }
         Ok(())
     }

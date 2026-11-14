@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use axum::extract::Path;
 use axum::extract::{Json, State};
-use axum::http::{header::CONTENT_TYPE, StatusCode};
+use axum::http::{
+    header::{AUTHORIZATION, CONTENT_TYPE},
+    HeaderMap, StatusCode,
+};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use hanzo_engine::{
@@ -251,6 +254,64 @@ pub struct LsaStatusResponse {
     pub config: Option<hanzo_engine::LsaConfig>,
 }
 
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn authorize_lsa_admin(headers: &HeaderMap) -> std::result::Result<(), (StatusCode, Json<Value>)> {
+    let expected = std::env::var("HANZO_LSA_ADMIN_TOKEN")
+        .or_else(|_| std::env::var("HANZO_ADMIN_TOKEN"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(expected) = expected else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "message": "LSA runtime mutations are disabled unless HANZO_LSA_ADMIN_TOKEN is configured; configure LSA at startup via --lsa",
+                    "type": "forbidden"
+                }
+            })),
+        ));
+    };
+
+    let provided = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
+        .map(str::trim)
+        .or_else(|| {
+            headers
+                .get("x-hanzo-admin-token")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        });
+
+    match provided {
+        Some(tok) if ct_eq(expected.as_bytes(), tok.as_bytes()) => Ok(()),
+        _ => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": {
+                    "message": "Unauthorized: valid admin bearer token required for /v1/lsa mutation",
+                    "type": "unauthorized"
+                }
+            })),
+        )),
+    }
+}
+
 /// GET `/v1/lsa` — inspect active Latent Sparse Attention (D-LSA / N-LSA) configuration.
 pub async fn get_lsa_config() -> Json<LsaStatusResponse> {
     let config = hanzo_engine::LsaConfig::global().map(|c| (*c).clone());
@@ -262,25 +323,47 @@ pub async fn get_lsa_config() -> Json<LsaStatusResponse> {
 }
 
 /// POST `/v1/lsa` — enable or update Latent Sparse Attention (D-LSA / N-LSA) live at runtime.
+///
+/// Requires admin authorization via `HANZO_LSA_ADMIN_TOKEN` (`Authorization: Bearer <token>`)
+/// and validates configuration bounds before installation. In-flight sequences pin their
+/// initial configuration until sequence completion.
 pub async fn set_lsa_config(
+    headers: HeaderMap,
     Json(config): Json<hanzo_engine::LsaConfig>,
-) -> Json<LsaStatusResponse> {
+) -> std::result::Result<Json<LsaStatusResponse>, (StatusCode, Json<Value>)> {
+    authorize_lsa_admin(&headers)?;
+    if let Err(msg) = config.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": format!("Invalid LSA configuration: {msg}"),
+                    "type": "invalid_request_error"
+                }
+            })),
+        ));
+    }
     config.clone().install();
-    Json(LsaStatusResponse {
+    Ok(Json(LsaStatusResponse {
         enabled: true,
         dispatches: hanzo_engine::LsaConfig::dispatches(),
         config: Some(config),
-    })
+    }))
 }
 
 /// DELETE `/v1/lsa` — disable Latent Sparse Attention and revert to standard attention.
-pub async fn delete_lsa_config() -> Json<LsaStatusResponse> {
+///
+/// Requires admin authorization via `HANZO_LSA_ADMIN_TOKEN` (`Authorization: Bearer <token>`).
+pub async fn delete_lsa_config(
+    headers: HeaderMap,
+) -> std::result::Result<Json<LsaStatusResponse>, (StatusCode, Json<Value>)> {
+    authorize_lsa_admin(&headers)?;
     hanzo_engine::LsaConfig::clear();
-    Json(LsaStatusResponse {
+    Ok(Json(LsaStatusResponse {
         enabled: false,
         dispatches: hanzo_engine::LsaConfig::dispatches(),
         config: None,
-    })
+    }))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -623,4 +706,88 @@ pub async fn delete_session(
         .delete_session(None, &session_id)
         .map(|_| StatusCode::OK)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[tokio::test]
+    async fn lsa_mutations_enforce_admin_token_and_bounds() {
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        hanzo_engine::LsaConfig::clear();
+        std::env::remove_var("HANZO_LSA_ADMIN_TOKEN");
+        std::env::remove_var("HANZO_ADMIN_TOKEN");
+
+        let valid_cfg = hanzo_engine::LsaConfig::zen_27b();
+
+        // 1. Without HANZO_LSA_ADMIN_TOKEN configured, mutations return 403 Forbidden.
+        let err = set_lsa_config(HeaderMap::new(), Json(valid_cfg.clone()))
+            .await
+            .expect_err("unconfigured admin token must forbid POST /v1/lsa");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert!(hanzo_engine::LsaConfig::global().is_none());
+
+        let err_del = delete_lsa_config(HeaderMap::new())
+            .await
+            .expect_err("unconfigured admin token must forbid DELETE /v1/lsa");
+        assert_eq!(err_del.0, StatusCode::FORBIDDEN);
+
+        // 2. With HANZO_LSA_ADMIN_TOKEN set, missing or wrong bearer token returns 401 Unauthorized.
+        std::env::set_var("HANZO_LSA_ADMIN_TOKEN", "test-secret-admin-token");
+
+        let err_missing = set_lsa_config(HeaderMap::new(), Json(valid_cfg.clone()))
+            .await
+            .expect_err("missing bearer token must return 401");
+        assert_eq!(err_missing.0, StatusCode::UNAUTHORIZED);
+        assert!(hanzo_engine::LsaConfig::global().is_none());
+
+        let mut bad_headers = HeaderMap::new();
+        bad_headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong-token"),
+        );
+        let err_wrong = set_lsa_config(bad_headers.clone(), Json(valid_cfg.clone()))
+            .await
+            .expect_err("wrong bearer token must return 401");
+        assert_eq!(err_wrong.0, StatusCode::UNAUTHORIZED);
+        assert!(hanzo_engine::LsaConfig::global().is_none());
+
+        // 3. Valid admin token with out-of-bounds config returns 400 Bad Request.
+        let mut auth_headers = HeaderMap::new();
+        auth_headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer test-secret-admin-token"),
+        );
+        let invalid_cfg = valid_cfg.clone().with_window_size(0);
+        let err_bounds = set_lsa_config(auth_headers.clone(), Json(invalid_cfg))
+            .await
+            .expect_err("window_size=0 must return 400");
+        assert_eq!(err_bounds.0, StatusCode::BAD_REQUEST);
+        assert!(hanzo_engine::LsaConfig::global().is_none());
+
+        // 4. Valid admin token + valid config succeeds (200 OK) and installs config; DELETE clears it.
+        let Json(status_on) = set_lsa_config(auth_headers.clone(), Json(valid_cfg.clone()))
+            .await
+            .expect("valid admin token + valid config must succeed");
+        assert!(status_on.enabled);
+        assert_eq!(status_on.config, Some(valid_cfg));
+
+        let err_del_unauth = delete_lsa_config(bad_headers)
+            .await
+            .expect_err("wrong bearer token must fail DELETE /v1/lsa");
+        assert_eq!(err_del_unauth.0, StatusCode::UNAUTHORIZED);
+        assert!(hanzo_engine::LsaConfig::global().is_some());
+
+        let Json(status_off) = delete_lsa_config(auth_headers)
+            .await
+            .expect("valid admin token must allow DELETE /v1/lsa");
+        assert!(!status_off.enabled);
+        assert!(hanzo_engine::LsaConfig::global().is_none());
+
+        std::env::remove_var("HANZO_LSA_ADMIN_TOKEN");
+    }
 }

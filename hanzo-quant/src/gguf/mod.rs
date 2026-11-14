@@ -115,7 +115,10 @@ impl GgufMatMul {
         if self.b.is_some() || !q.device().is_metal() || a.dtype() != DType::BF16 {
             return Ok(None);
         }
-        if !matches!(q.dtype(), GgmlDType::Q4K | GgmlDType::Q6K) {
+        if !matches!(
+            q.dtype(),
+            GgmlDType::Q4K | GgmlDType::Q6K | GgmlDType::PQ2_0 | GgmlDType::PTQ1_0
+        ) {
             return Ok(None);
         }
         Ok(Some(self.w.forward(a)?))

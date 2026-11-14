@@ -3439,9 +3439,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.11.40"
+version = "0.11.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936e15782afe3be515c64331947ecd09db12480690f0aa480c9d28c360677307"
+checksum = "61c446aef00cac04c17eda840d40b0ebb05e0e5cf900f41959146370203efe5f"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3481,9 +3481,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.11.47"
+version = "0.11.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37eb94d720adcb758a0632907d52d0950fabdbd6afacf43502009fd8916bdadb"
+checksum = "0e578afd2e467808ab082e897a054e5f174afd8f0fc7d01c8549b046c322fb09"
 dependencies = [
  "block2",
  "half",
@@ -3497,9 +3497,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.113"
+version = "0.11.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15f3a1d41f6e3e81f420c951e08ea3614610da950056c2668c92816606ba2d74"
+checksum = "bf2877773093a2bb32e2c608a9ece1f858e94adb4e6ae6cbd543b09f4d535329"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3536,9 +3536,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.11.49"
+version = "0.11.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "127113b6911b3f56fce5e6408c2bf9e2591403c68cfe2e7ce8effdb399ebbbad"
+checksum = "63af5a1c03a50f5ab90f42aa2b51399c1a4aa73c6a8d8c803a8c5a500bec62da"
 dependencies = [
  "accelerate-src",
  "float8",
@@ -3649,9 +3649,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.43"
+version = "0.11.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73170329a06e496a47c5290ccd2e36a96eaea811640f24a92bd9862a1d05c188"
+checksum = "6e947078a394289cb520cd94e98a580de7e688f2f7091b07640dead36c57df39"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3774,9 +3774,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-transformers"
-version = "0.11.10"
+version = "0.11.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f33c79e0af54abbc2f977a7e4adc8fdef167d6b40507a0b74ecc5024ed372fd0"
+checksum = "3a3925296cdacfb7ac22194c42b63f7ec68fe5c5f183de1f412c7cf8d9f43def"
 dependencies = [
  "byteorder",
  "fancy-regex 0.19.2",
