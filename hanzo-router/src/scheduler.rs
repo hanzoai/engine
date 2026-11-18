@@ -72,7 +72,9 @@ pub struct SchedulerState {
     /// A hint says who saw a prefix; this says who still holds it, in tokens, and
     /// is the only locality evidence that survives eviction or a replica restart.
     residency: HashMap<String, HashMap<String, (usize, Instant)>>,
+    tiered: HashMap<String, HashMap<String, (crate::bidaw::KvTierResidency, Instant)>>,
     ttft: HashMap<String, f64>,
+    bidaw: Option<crate::bidaw::BidawCostModel>,
 }
 
 impl SchedulerState {
@@ -82,6 +84,10 @@ impl SchedulerState {
             by_worker.remove(worker);
         }
         self.residency.retain(|_, by_worker| !by_worker.is_empty());
+        for by_worker in self.tiered.values_mut() {
+            by_worker.remove(worker);
+        }
+        self.tiered.retain(|_, by_worker| !by_worker.is_empty());
         self.ttft.remove(worker);
     }
 
@@ -98,6 +104,31 @@ impl SchedulerState {
             by_worker.retain(|_, (_, seen)| now.saturating_duration_since(*seen) < PREFIX_TTL);
         }
         self.residency.retain(|_, by_worker| !by_worker.is_empty());
+        for by_worker in self.tiered.values_mut() {
+            by_worker.retain(|_, (_, seen)| now.saturating_duration_since(*seen) < PREFIX_TTL);
+        }
+        self.tiered.retain(|_, by_worker| !by_worker.is_empty());
+    }
+
+    fn effective_residency(
+        &self,
+        prefix: Option<&String>,
+        worker: &str,
+    ) -> crate::bidaw::KvTierResidency {
+        let gpu_flat = self.cached_tokens(prefix, worker);
+        if let Some(t) = prefix
+            .and_then(|p| self.tiered.get(p))
+            .and_then(|by_w| by_w.get(worker))
+            .map(|(r, _)| *r)
+        {
+            crate::bidaw::KvTierResidency {
+                gpu_tokens: t.gpu_tokens.max(gpu_flat),
+                host_tokens: t.host_tokens,
+                nvme_tokens: t.nvme_tokens,
+            }
+        } else {
+            crate::bidaw::KvTierResidency::gpu_only(gpu_flat)
+        }
     }
 
     /// Most any worker has reported for a prefix, or zero with nothing measured.
@@ -213,14 +244,45 @@ impl ReplicaSet {
                 return None;
             }
         }
+        let node_est = |n: &Arc<Node>, model: &crate::bidaw::BidawCostModel, s: &SchedulerState| {
+            let settings = n.settings.read().unwrap();
+            model.estimate(
+                hints.required_tokens(&n.replica.id),
+                s.effective_residency(hints.prefix.as_ref(), &n.replica.id),
+                n.inflight.load(Ordering::Acquire),
+                self.slots(n),
+                s.ttft_ms(&n.replica.id),
+                settings.weight,
+            )
+        };
         if selected.is_none() {
             if let Some(pin) = hints.session.as_ref().and_then(|s| state.sessions.get(s)) {
                 selected = inner
                     .nodes
                     .get(&pin.worker)
                     .filter(|n| {
-                        healthy(n)
-                            && n.inflight.load(Ordering::Acquire) < self.slots(n).saturating_mul(2)
+                        let inf = n.inflight.load(Ordering::Acquire);
+                        let cap = self.slots(n);
+                        if !healthy(n) || inf >= cap.saturating_mul(2) {
+                            return false;
+                        }
+                        if let Some(model) = &state.bidaw {
+                            if inf >= cap {
+                                let pin_ms = node_est(n, model, &state).total_ttft_ms;
+                                let alt_better = inner
+                                    .nodes
+                                    .values()
+                                    .filter(|m| m.replica.id != n.replica.id && available(m))
+                                    .any(|m| {
+                                        model.bucket(node_est(m, model, &state).total_ttft_ms)
+                                            < model.bucket(pin_ms)
+                                    });
+                                if alt_better {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
                     })
                     .cloned();
             }
@@ -235,9 +297,14 @@ impl ReplicaSet {
             let rank = |n: &Arc<Node>| {
                 let settings = n.settings.read().unwrap().clone();
                 let measured = state.cached_tokens(hints.prefix.as_ref(), &n.replica.id);
-                // A worker holding more of this prefix wins outright. Only when
-                // nothing is measured anywhere does the unproven hint decide.
+                let tiered_total = state
+                    .effective_residency(hints.prefix.as_ref(), &n.replica.id)
+                    .total_tokens();
+                // A worker holding more of this prefix wins outright when Bidaw cost
+                // scheduling is off; when Bidaw is enabled, expected TTFT leads and
+                // residency/role/load break ties within the same latency quantum.
                 let cache = measured > 0
+                    || tiered_total > 0
                     || (state.cached_max(hints.prefix.as_ref()) == 0
                         && hinted.is_some_and(|e| e.worker == n.replica.id));
                 let role = hints
@@ -255,9 +322,17 @@ impl ReplicaSet {
                 let allocation = (sessions.get(n.replica.id.as_str()).copied().unwrap_or(0) + 1)
                     as f64
                     / settings.weight as f64;
+                let (cost_bucket, primary_residency) = match &state.bidaw {
+                    Some(model) => (
+                        model.bucket(node_est(n, model, &state).total_ttft_ms),
+                        std::cmp::Reverse(tiered_total),
+                    ),
+                    None => (0u64, std::cmp::Reverse(measured)),
+                };
                 (
-                    std::cmp::Reverse(measured),
                     room,
+                    cost_bucket,
+                    primary_residency,
                     !cache,
                     !role,
                     load,
@@ -364,6 +439,78 @@ impl ReplicaSet {
             .entry(worker.to_owned())
             .and_modify(|old| *old = 0.8 * *old + 0.2 * sample)
             .or_insert(sample);
+    }
+
+    /// Enable or disable Bidaw KV-residency and load-time cost scheduling on this pool.
+    pub fn set_bidaw_model(&self, model: Option<crate::bidaw::BidawCostModel>) {
+        self.scheduler.lock().unwrap().bidaw = model;
+    }
+
+    /// Record multi-tier KV prefix residency (GPU HBM, host DRAM, local NVMe) for `worker`.
+    pub fn observe_tiered_residency(
+        &self,
+        worker: &str,
+        prefix: &str,
+        residency: crate::bidaw::KvTierResidency,
+        now: Instant,
+    ) {
+        let inner = self.inner.read().unwrap();
+        if !inner
+            .nodes
+            .get(worker)
+            .is_some_and(|n| n.healthy.load(Ordering::Acquire))
+        {
+            return;
+        }
+        let mut state = self.scheduler.lock().unwrap();
+        state.prune(now);
+        if state.tiered.len() >= MAX_ENTRIES && !state.tiered.contains_key(prefix) {
+            if let Some(oldest) = state
+                .tiered
+                .iter()
+                .filter_map(|(k, by_w)| by_w.values().map(|(_, t)| *t).min().map(|t| (k.clone(), t)))
+                .min_by_key(|(_, t)| *t)
+                .map(|(k, _)| k)
+            {
+                state.tiered.remove(&oldest);
+            }
+        }
+        remember(&mut state.prefixes, prefix.to_owned(), worker, now);
+        if residency.gpu_tokens > 0 {
+            state
+                .residency
+                .entry(prefix.to_owned())
+                .or_default()
+                .insert(worker.to_owned(), (residency.gpu_tokens, now));
+        }
+        state
+            .tiered
+            .entry(prefix.to_owned())
+            .or_default()
+            .insert(worker.to_owned(), (residency, now));
+    }
+
+    /// Inspect the Bidaw TTFT decomposition for routing `hints` to `worker` at `now`.
+    pub fn estimate_replica_ttft(
+        &self,
+        worker: &str,
+        hints: &RoutingHints,
+        now: Instant,
+    ) -> Option<crate::bidaw::TieredEstimate> {
+        let inner = self.inner.read().unwrap();
+        let node = inner.nodes.get(worker)?;
+        let mut state = self.scheduler.lock().unwrap();
+        state.prune(now);
+        let model = state.bidaw.unwrap_or_default();
+        let settings = node.settings.read().unwrap();
+        Some(model.estimate(
+            hints.required_tokens(&node.replica.id),
+            state.effective_residency(hints.prefix.as_ref(), &node.replica.id),
+            node.inflight.load(Ordering::Acquire),
+            self.slots(node),
+            state.ttft_ms(&node.replica.id),
+            settings.weight,
+        ))
     }
 }
 

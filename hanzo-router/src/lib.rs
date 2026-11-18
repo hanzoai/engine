@@ -38,6 +38,7 @@
 //! assert!(matches!(policy.select(&ctx), Decision::LoadLocal { .. }));
 //! ```
 
+pub mod bidaw;
 pub mod classify;
 pub mod featurize;
 pub mod heads;
@@ -53,6 +54,7 @@ mod pool_file;
 #[cfg(feature = "proxy")]
 pub mod proxy;
 
+pub use bidaw::{BidawCostModel, KvTierResidency, TieredEstimate};
 pub use classify::{Classifier, Heuristic, Request};
 pub use featurize::{Featurizer, HashFeaturizer};
 pub use heads::{congestion, Heads, LoadField, LOAD_CAP};
