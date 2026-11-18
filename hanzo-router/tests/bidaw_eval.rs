@@ -70,7 +70,12 @@ fn diverts_small_prefix_off_congested_worker_while_keeping_deep_prefix_pinned() 
     // cold recompute, easily outweighing 450 ms of queue wait.
     small.prefix = Some("deep-32k-conv".into());
     small.approx_tokens = 33_280;
-    pool.observe_tiered_residency("evo", "deep-32k-conv", KvTierResidency::gpu_only(32_768), now);
+    pool.observe_tiered_residency(
+        "evo",
+        "deep-32k-conv",
+        KvTierResidency::gpu_only(32_768),
+        now,
+    );
     let chosen_deep = pool.pick_agent(&small, &HashSet::new(), now).unwrap();
     assert_eq!(
         chosen_deep.id(),
@@ -118,7 +123,11 @@ fn host_dram_and_nvme_tiers_rank_by_load_latency_and_fallback_when_tier_is_slowe
         ..Default::default()
     };
     let l1 = pool.pick_agent(&h, &HashSet::new(), now).unwrap();
-    assert_eq!(l1.id(), "evo", "host DRAM residency beats NVMe and cold prefill");
+    assert_eq!(
+        l1.id(),
+        "evo",
+        "host DRAM residency beats NVMe and cold prefill"
+    );
     drop(l1);
 
     // Negative/boundary case: if NVMe bandwidth degrades to 400 tok/s (slower than Spark's
@@ -174,7 +183,9 @@ fn concurrent_updates_health_invalidation_and_nan_sanitization() {
                     approx_tokens: 8_192,
                     ..Default::default()
                 };
-                if let Some(lease) = p.pick_agent(&h, &HashSet::new(), now + Duration::from_millis(i as u64)) {
+                if let Some(lease) =
+                    p.pick_agent(&h, &HashSet::new(), now + Duration::from_millis(i as u64))
+                {
                     assert!(!lease.id().is_empty());
                 }
             }
@@ -196,7 +207,10 @@ fn concurrent_updates_health_invalidation_and_nan_sanitization() {
             now + Duration::from_millis(100),
         )
         .unwrap();
-    assert_eq!(est.gpu_hit_tokens, 0, "health flip invalidates tiered residency");
+    assert_eq!(
+        est.gpu_hit_tokens, 0,
+        "health flip invalidates tiered residency"
+    );
 }
 
 #[test]
@@ -226,7 +240,9 @@ fn reproducible_mixed_warm_cold_trace_benchmark() {
         let mut ttfts_ms: Vec<f64> = Vec::with_capacity(600);
         let mut rng: u64 = 0x5eed_cafe_1346_0086;
         let mut next_u64 = || {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             rng
         };
 
@@ -268,10 +284,18 @@ fn reproducible_mixed_warm_cold_trace_benchmark() {
             let r = next_u64() % 100;
             let (prefix, tokens, decode_ms) = if r < 55 {
                 let c = (next_u64() as usize) % 14;
-                (Some(format!("conv-{c}")), 512 + ((next_u64() as usize) % 768), 320u64)
+                (
+                    Some(format!("conv-{c}")),
+                    512 + ((next_u64() as usize) % 768),
+                    320u64,
+                )
             } else if r < 80 {
                 let c = 14 + ((next_u64() as usize) % 10);
-                (Some(format!("conv-{c}")), 28_000 + ((next_u64() as usize) % 6_000), 420u64)
+                (
+                    Some(format!("conv-{c}")),
+                    28_000 + ((next_u64() as usize) % 6_000),
+                    420u64,
+                )
             } else {
                 (None, 512 + ((next_u64() as usize) % 1_536), 240u64)
             };
@@ -285,7 +309,11 @@ fn reproducible_mixed_warm_cold_trace_benchmark() {
             if let Some(lease) = pool.pick_agent(&hints, &HashSet::new(), now) {
                 let wid = lease.id().to_string();
                 // Measure actual TTFT using ground-truth physics (BidawCostModel::default()) even when greedy scheduler is evaluated!
-                let settings_w = match wid.as_str() { "spark" => 150, "dbc" => 120, _ => 100 };
+                let settings_w = match wid.as_str() {
+                    "spark" => 150,
+                    "dbc" => 120,
+                    _ => 100,
+                };
                 let est = pool.estimate_replica_ttft(&wid, &hints, now).unwrap();
                 let _ = settings_w;
                 ttfts_ms.push(est.total_ttft_ms);

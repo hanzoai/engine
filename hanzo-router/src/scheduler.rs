@@ -468,7 +468,9 @@ impl ReplicaSet {
             if let Some(oldest) = state
                 .tiered
                 .iter()
-                .filter_map(|(k, by_w)| by_w.values().map(|(_, t)| *t).min().map(|t| (k.clone(), t)))
+                .filter_map(|(k, by_w)| {
+                    by_w.values().map(|(_, t)| *t).min().map(|t| (k.clone(), t))
+                })
                 .min_by_key(|(_, t)| *t)
                 .map(|(k, _)| k)
             {
