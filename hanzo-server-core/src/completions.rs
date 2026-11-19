@@ -335,6 +335,7 @@ pub fn parse_request(
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
             session_id: None,
             files: None,
+            cache_salt: None,
         })),
         is_streaming,
     ))
@@ -351,9 +352,10 @@ pub fn parse_request(
 pub async fn completions(
     State(state): ExtractedState,
     Extension(defaults): Extension<Defaults>,
+    headers: http::HeaderMap,
     body: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> CompletionResponder {
-    let oairequest = match body {
+    let mut oairequest = match body {
         Ok(Json(oairequest)) => oairequest,
         Err(rejection) => {
             return CompletionResponder::ValidationError(Box::new(ApiError::from(rejection)))
@@ -370,10 +372,13 @@ pub async fn completions(
         single_call: false,
     };
 
-    let (request, is_streaming) = match parse_request(oairequest, state.clone(), &defaults, tx) {
+    let salt = crate::tenant::cache_salt(&headers, oairequest.cache_salt.take());
+    let (mut request, is_streaming) = match parse_request(oairequest, state.clone(), &defaults, tx)
+    {
         Ok(x) => x,
         Err(e) => return handle_request_error(state, e),
     };
+    crate::tenant::partition(&mut request, salt);
 
     if let Err(e) = send_request(&state, request).await {
         return handle_error(state, e.into());

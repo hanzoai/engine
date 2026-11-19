@@ -1490,6 +1490,7 @@ async fn parse_openresponses_request(
     state: SharedState,
     defaults: &Defaults,
     tx: Sender<Response>,
+    salt: Option<String>,
 ) -> Result<(
     Request,
     bool,
@@ -1618,6 +1619,7 @@ async fn parse_openresponses_request(
 
     // Convert to ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
+        cache_salt: None,
         messages: Either::Left(final_messages.clone()),
         model: oairequest.model,
         logit_bias: oairequest.logit_bias,
@@ -1668,8 +1670,9 @@ async fn parse_openresponses_request(
         files: None,
     };
 
-    let (request, is_streaming) =
+    let (mut request, is_streaming) =
         parse_chat_request(chat_request, state, defaults, tx, None, None, None).await?;
+    crate::tenant::partition(&mut request, salt);
     Ok((
         request,
         is_streaming,
@@ -1690,8 +1693,10 @@ async fn parse_openresponses_request(
 pub async fn create_response(
     State(state): ExtractedState,
     Extension(defaults): Extension<Defaults>,
+    headers: http::HeaderMap,
     body: Result<Json<OpenResponsesCreateRequest>, JsonRejection>,
 ) -> OpenResponsesResponder {
+    let salt = crate::tenant::cache_salt(&headers, None);
     let oairequest = match body {
         Ok(Json(oairequest)) => oairequest,
         Err(rejection) => {
@@ -1745,8 +1750,14 @@ pub async fn create_response(
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
             let (request, _, conversation_history, _include_config, request_context) =
-                match parse_openresponses_request(oairequest, state_clone.clone(), &defaults, bg_tx)
-                    .await
+                match parse_openresponses_request(
+                    oairequest,
+                    state_clone.clone(),
+                    &defaults,
+                    bg_tx,
+                    salt,
+                )
+                .await
                 {
                     Ok(x) => x,
                     Err(e) => {
@@ -1839,7 +1850,7 @@ pub async fn create_response(
     }
 
     let (request, is_streaming, conversation_history, _include_config, request_context) =
-        match parse_openresponses_request(oairequest, state.clone(), &defaults, tx).await {
+        match parse_openresponses_request(oairequest, state.clone(), &defaults, tx, salt).await {
             Ok(x) => x,
             Err(e) => return handle_request_error(state, e),
         };

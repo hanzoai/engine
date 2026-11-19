@@ -185,6 +185,7 @@ async fn greedy_complete(
         model_id: None,
         truncate_sequence: false,
         files: None,
+        cache_salt: None,
     }));
 
     sender.send(req).await.expect("send request");

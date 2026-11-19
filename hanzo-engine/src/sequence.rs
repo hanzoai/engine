@@ -8,7 +8,7 @@ use crate::{
 };
 use crate::{
     get_mut_arcmutex, get_mut_group,
-    paged_attention::block_hash::MultiModalFeature,
+    paged_attention::block_hash::{salt_keys, ExtraHashKey, MultiModalFeature},
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -563,6 +563,8 @@ pub struct Sequence {
     /// Number of tokens at the start of the prompt that are cached (KV already computed).
     /// These tokens should be skipped during prefill.
     prefix_cache_len: usize,
+    /// Prefix-cache partition of the request; `None` shares with every other unsalted request.
+    cache_salt: Option<String>,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -691,6 +693,7 @@ impl Sequence {
             recognizer,
             prefill_prompt_toks: None,
             prefix_cache_len: 0,
+            cache_salt: None,
             suffix,
             prefix,
             cumulative_logprob: 0.,
@@ -883,6 +886,19 @@ impl Sequence {
     /// Set the number of prefix tokens that are cached.
     pub fn set_prefix_cache_len(&mut self, len: usize) {
         self.prefix_cache_len = len;
+    }
+
+    pub fn set_cache_salt(&mut self, salt: Option<String>) {
+        self.cache_salt = salt;
+    }
+
+    pub fn cache_salt(&self) -> Option<&str> {
+        self.cache_salt.as_deref()
+    }
+
+    /// The extra hash keys of every prefix-cache block this sequence writes or reads.
+    pub fn prefix_hash_keys(&self) -> Vec<ExtraHashKey> {
+        salt_keys(self.cache_salt())
     }
 
     /// Override the maximum generation length.

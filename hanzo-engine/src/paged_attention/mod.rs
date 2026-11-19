@@ -12,6 +12,8 @@ mod config;
 pub mod encoder_cache;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
+#[cfg(test)]
+mod kv_isolation;
 mod layers;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;

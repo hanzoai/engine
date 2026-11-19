@@ -132,6 +132,7 @@ async fn greedy(
         model_id: None,
         truncate_sequence: false,
         files: None,
+        cache_salt: None,
     }));
 
     let start = Instant::now();

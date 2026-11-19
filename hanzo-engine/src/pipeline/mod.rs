@@ -1566,7 +1566,7 @@ pub trait Pipeline:
                                                 orig_toks,
                                                 pa_block_size,
                                                 seq.mm_features(),
-                                                &[],
+                                                &seq.prefix_hash_keys(),
                                             );
                                         if block_hashes.len() >= num_blocks {
                                             prefix_cacher.add_paged_recurrent_prefix(

@@ -345,6 +345,7 @@ async fn text_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool, enable_thinki
             model_id: None,
             truncate_sequence: false,
             files: None,
+            cache_salt: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -718,6 +719,7 @@ async fn multimodal_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            cache_salt: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -915,6 +917,7 @@ async fn diffusion_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool) {
             model_id: None,
             truncate_sequence: false,
             files: None,
+            cache_salt: None,
         }));
 
         let start = Instant::now();
@@ -1014,6 +1017,7 @@ async fn speech_interactive_mode(hanzo: Arc<Hanzo>, do_search: bool) {
             model_id: None,
             truncate_sequence: false,
             files: None,
+            cache_salt: None,
         }));
 
         let start = Instant::now();

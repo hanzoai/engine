@@ -161,6 +161,7 @@ async fn animate_inner(state: SharedState, req: AnimateRequest) -> Result<Vec<u8
         truncate_sequence: false,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
     send_request(&state, request).await?;
 

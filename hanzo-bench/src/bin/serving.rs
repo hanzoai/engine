@@ -288,6 +288,7 @@ fn make_request(
         truncate_sequence: false,
         session_id: None,
         files: None,
+        cache_salt: None,
     }))
 }
 

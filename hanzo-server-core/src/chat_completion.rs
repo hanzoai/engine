@@ -1134,6 +1134,7 @@ pub async fn parse_request(
             tool_dispatch_url,
             model_id,
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
+            cache_salt: None,
         })),
         is_streaming,
     ))
@@ -1151,6 +1152,7 @@ pub async fn chatcompletions(
     State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(defaults): Extension<Defaults>,
+    headers: http::HeaderMap,
     body: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> ChatCompletionResponder {
     let mut oairequest = match body {
@@ -1210,8 +1212,9 @@ pub async fn chatcompletions(
         Some(oairequest.model.clone())
     };
 
+    let salt = crate::tenant::cache_salt(&headers, oairequest.cache_salt.take());
     // tool_dispatch_url is server-level only (not settable per-request via HTTP API) for security
-    let (request, is_streaming) = match parse_request(
+    let (mut request, is_streaming) = match parse_request(
         oairequest,
         state.clone(),
         &defaults,
@@ -1225,6 +1228,7 @@ pub async fn chatcompletions(
         Ok(x) => x,
         Err(e) => return handle_request_error(state, e),
     };
+    crate::tenant::partition(&mut request, salt);
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());

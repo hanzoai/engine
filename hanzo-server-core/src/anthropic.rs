@@ -1052,6 +1052,7 @@ impl AnthropicMessagesRequest {
             .transpose()?;
 
         Ok(ChatCompletionRequest {
+            cache_salt: None,
             messages: Either::Left(messages),
             model,
             logit_bias: self.logit_bias,
@@ -1644,6 +1645,7 @@ pub async fn messages(
     State(state): ExtractedState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(defaults): Extension<Defaults>,
+    headers: axum::http::HeaderMap,
     body: Result<Json<Value>, JsonRejection>,
 ) -> axum::response::Response {
     let body = match body {
@@ -1682,7 +1684,7 @@ pub async fn messages(
         .or(agentic_defaults.max_tool_rounds);
 
     let (tx, mut rx) = create_response_channel(None);
-    let (request, _is_streaming) = match parse_request(
+    let (mut request, _is_streaming) = match parse_request(
         oairequest,
         state.clone(),
         &defaults,
@@ -1696,6 +1698,7 @@ pub async fn messages(
         Ok(x) => x,
         Err(e) => return anthropic_api_error(ApiError::from_request(&e)),
     };
+    crate::tenant::partition(&mut request, crate::tenant::cache_salt(&headers, None));
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return anthropic_error(

@@ -1239,6 +1239,7 @@ impl Hanzo {
                     truncate_sequence: false,
                     session_id: None,
                     files: None,
+                    cache_salt: None,
                 }));
                 debug!("Beginning dummy run.");
                 let start = Instant::now();

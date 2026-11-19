@@ -150,6 +150,7 @@ async fn transcribe_inner(state: SharedState, req: Request) -> Result<String> {
         truncate_sequence: false,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
     send_request(&state, request).await?;
 

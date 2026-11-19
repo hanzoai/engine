@@ -736,7 +736,7 @@ impl Engine {
                                                 seq.get_toks(),
                                                 block_size,
                                                 seq.mm_features(),
-                                                &[],
+                                                &seq.prefix_hash_keys(),
                                             );
                                             if block_hashes.len() < num_prefix_blocks {
                                                 fallback_to_full_prompt = true;
@@ -934,7 +934,7 @@ impl Engine {
                                         seq.get_toks(),
                                         block_size,
                                         seq.mm_features(),
-                                        &[],
+                                        &seq.prefix_hash_keys(),
                                     );
                                     if block_hashes.len() < num_blocks {
                                         continue;

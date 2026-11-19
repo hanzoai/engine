@@ -235,6 +235,7 @@ async fn fetch_embedding(
         truncate_sequence,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -278,6 +279,7 @@ async fn fetch_embedding_tokens(
         truncate_sequence,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -326,6 +328,7 @@ async fn fetch_embedding_image(
         truncate_sequence: false,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
 
     send_request_with_model(&state, request, model_id)

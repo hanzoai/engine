@@ -48,9 +48,15 @@ pub enum ExtraHashKey {
     /// LoRA adapter name, different adapters produce different KV values.
     #[allow(dead_code)]
     LoraName(String),
-    /// User-provided cache salt for per-request isolation.
-    #[allow(dead_code)]
+    /// Prefix-cache partition: blocks are shared only between requests with an equal salt.
     CacheSalt(String),
+}
+
+/// The extra keys every block of a request carries. Two requests reuse each other's KV only when
+/// their salts are equal, so the salt is the isolation boundary for the whole prefix cache.
+pub fn salt_keys(salt: Option<&str>) -> Vec<ExtraHashKey> {
+    salt.map(|s| vec![ExtraHashKey::CacheSalt(s.to_owned())])
+        .unwrap_or_default()
 }
 
 /// Metadata about a multimodal feature's position in the token sequence.

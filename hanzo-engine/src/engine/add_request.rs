@@ -714,6 +714,7 @@ impl Engine {
                 eos_toks,
             );
 
+            seq.set_cache_salt(request.cache_salt.clone());
             if let Some(params) = animation_params {
                 seq.set_animation_params(params);
             }
@@ -851,6 +852,7 @@ impl Engine {
                 let found = handle_seq_error!(
                     prefix_cacher.search_for_matching_cache(
                         seq.get_toks(),
+                        seq.cache_salt(),
                         seq.image_hashes(),
                         seq.audio_hashes(),
                         seq.video_hashes(),

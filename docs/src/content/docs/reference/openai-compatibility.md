@@ -49,6 +49,7 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
+- `cache_salt`: a prefix-cache partition within the caller's org. Only requests with the same salt reuse each other's cached prompt; see [Prefix-cache isolation](/hanzo/explanation/paged-attention/#prefix-cache-isolation).
 
 ## Responses API fields
 
@@ -60,7 +61,7 @@ See the [Responses guide](/hanzo/guides/serve/openai-responses-api/). Notable ex
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `cache_salt`. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
 
 ## Embeddings
 

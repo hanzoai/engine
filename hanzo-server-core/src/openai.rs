@@ -683,6 +683,11 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
+    /// Prefix-cache partition within the caller's org: only requests with the same salt reuse
+    /// each other's cached prompt.
+    #[schema(example = json!(Option::None::<String>))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_salt: Option<String>,
 }
 
 /// Function for ChatCompletionRequest.messages Schema generation to handle `Either`
@@ -811,6 +816,11 @@ pub struct CompletionRequest {
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
+    /// Prefix-cache partition within the caller's org: only requests with the same salt reuse
+    /// each other's cached prompt.
+    #[schema(example = json!(Option::None::<String>))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_salt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -296,6 +296,10 @@ pub struct NormalRequest {
     /// Required output files. The runtime asks the model to produce them and surfaces a `File` (or error placeholder) for each.
     #[serde(default)]
     pub files: Option<Vec<crate::files::RequestedFile>>,
+    /// Prefix-cache partition. Only requests with an equal salt reuse each other's cached KV; the
+    /// server sets it from the caller's tenant so one tenant's prompt never decodes against another's.
+    #[serde(default)]
+    pub cache_salt: Option<String>,
 }
 
 impl NormalRequest {
@@ -333,6 +337,7 @@ impl NormalRequest {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            cache_salt: None,
         }
     }
 }

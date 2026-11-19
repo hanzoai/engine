@@ -26,6 +26,11 @@ test:
       ! git grep -nE -e '["(`]/api/' -e "'/api/" -e '}api/' -- ':!*.md' ':!hanzo.yml'
   - name: fmt
     run: rustup component add rustfmt && cargo fmt --all -- --check
+  # Prefix-cache tenant isolation: no request decodes against another tenant's KV or against KV no
+  # forward wrote. A security boundary, so it runs before the workspace-wide check, which a crate
+  # it does not build could turn red.
+  - name: kv-isolation
+    run: cargo test -p hanzo-engine -p hanzo-server-core --lib -- kv_isolation tenant::
   - name: check
     run: cargo check --workspace
 

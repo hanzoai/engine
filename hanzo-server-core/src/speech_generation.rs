@@ -96,6 +96,7 @@ pub fn parse_request(
         truncate_sequence: false,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
 
     Ok((request, oairequest.response_format))

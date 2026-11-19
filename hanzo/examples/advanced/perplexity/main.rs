@@ -66,6 +66,7 @@ async fn process_chunk(runner: &Hanzo, chunk: Vec<u32>) -> anyhow::Result<(Tenso
         truncate_sequence: false,
         session_id: None,
         files: None,
+        cache_salt: None,
     }));
 
     runner.get_sender(None)?.send(request).await?;

@@ -27,6 +27,14 @@ Each sequence holds a list of block pointers. On each decoding step, the schedul
 
 Shared-prefix optimization: sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind prefix caching when paged attention is on.
 
+### Prefix-cache isolation
+
+Every request carries a cache salt, and every block hash includes it, so two requests share cached KV only when their salts are equal. The server builds the salt from the `X-Org-Id` header, which the gateway sets from the validated caller, together with the optional `cache_salt` body field (`/v1/chat/completions`, `/v1/completions`). The two parts are encoded together, so a body salt narrows sharing within an org and never reaches another org's blocks. `/v1/messages` and `/v1/responses` take the org alone. A request with neither shares only with other unsalted requests. Trust in `X-Org-Id` comes from the gateway, so the engine must not be reachable by clients that could set it themselves.
+
+The sequence-level prefix cache used without paged attention is keyed the same way, and a salted prefix is dropped rather than spilled to disk on eviction, because a spill file is keyed by tokens alone.
+
+A block becomes reusable only once every slot holds KV a forward wrote: the last sampled token's slot is written by the next forward, and a sequence preempted before its first forward caches nothing.
+
 ## Cache types
 
 `--pa-cache-type` sets the KV cache's numeric representation:

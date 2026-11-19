@@ -157,6 +157,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            cache_salt: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -218,6 +219,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            cache_salt: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -296,6 +298,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            cache_salt: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -466,6 +469,7 @@ impl Model {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            cache_salt: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -537,6 +541,7 @@ impl Model {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            cache_salt: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -621,6 +626,7 @@ impl Model {
                     truncate_sequence,
                     session_id: None,
                     files: None,
+                    cache_salt: None,
                 }));
 
                 runner

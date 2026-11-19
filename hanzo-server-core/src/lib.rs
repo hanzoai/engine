@@ -258,6 +258,7 @@ pub mod server;
 pub mod shape;
 pub mod speech_generation;
 pub mod streaming;
+pub mod tenant;
 pub mod threed_generation;
 pub mod training;
 pub mod tryon_generation;

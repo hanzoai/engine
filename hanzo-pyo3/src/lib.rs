@@ -1334,6 +1334,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
+                cache_salt: None,
             }));
 
             let is_streaming = request.stream;
@@ -1423,6 +1424,7 @@ impl Runner {
                         truncate_sequence,
                         session_id: None,
                         files: None,
+                        cache_salt: None,
                     }));
 
                     sender
@@ -1551,6 +1553,7 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
                 files: None,
+                cache_salt: None,
             }));
 
             let debug_repr = format!("{request:?}");
@@ -1619,6 +1622,7 @@ impl Runner {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            cache_salt: None,
         }));
 
         let runner = self.runner.clone();
@@ -1679,6 +1683,7 @@ impl Runner {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            cache_salt: None,
         }));
 
         let runner = self.runner.clone();
@@ -2234,6 +2239,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
+                cache_salt: None,
             }));
 
             let is_streaming = request.stream;
@@ -2350,6 +2356,7 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
                 files: None,
+                cache_salt: None,
             }));
 
             let debug_repr = format!("{request:?}");

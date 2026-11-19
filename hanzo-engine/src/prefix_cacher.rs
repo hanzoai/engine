@@ -12,23 +12,37 @@ use crate::{
     sequence::Sequence,
 };
 
+/// A cached sequence's tokens and the cache salt of the request that produced them.
 #[derive(PartialEq, Eq, Debug, Hash)]
-struct Tokens(Vec<u32>);
+struct Tokens {
+    salt: Option<String>,
+    toks: Vec<u32>,
+}
 
 impl Tokens {
-    /// Returns the length of the common prefix shared with `other`.
+    fn new(salt: Option<&str>, toks: &[u32]) -> Self {
+        Self {
+            salt: salt.map(str::to_owned),
+            toks: toks.to_vec(),
+        }
+    }
+
+    /// Returns the length of the common prefix shared with `other`; none across salts.
     fn shared_prefix_len(&self, other: &Self) -> usize {
-        self.0
+        if self.salt != other.salt {
+            return 0;
+        }
+        self.toks
             .iter()
-            .zip(other.0.iter())
+            .zip(other.toks.iter())
             .take_while(|(a, b)| a == b)
             .count()
     }
 }
 
 impl From<Vec<u32>> for Tokens {
-    fn from(value: Vec<u32>) -> Self {
-        Self(value)
+    fn from(toks: Vec<u32>) -> Self {
+        Self { salt: None, toks }
     }
 }
 
@@ -305,7 +319,7 @@ impl PrefixCacheManagerV2 {
 
             self.stores += 1;
             self.caches.insert(
-                seq.get_toks().to_vec().into(),
+                Tokens::new(seq.cache_salt(), seq.get_toks()),
                 CacheElement {
                     cache,
                     recurrent_snapshots,
@@ -417,8 +431,12 @@ impl PrefixCacheManagerV2 {
             if n_evicted >= n_to_evict {
                 break;
             }
-            if let Err(e) = spill_prefix(store, fingerprint, &tokens.0, cache) {
-                tracing::warn!("KV prefix spill failed (dropping instead): {e}");
+            // A spill file is keyed by tokens alone and restores unsalted, so a salted prefix
+            // would come back shared with every tenant: drop it instead.
+            if tokens.salt.is_none() {
+                if let Err(e) = spill_prefix(store, fingerprint, &tokens.toks, cache) {
+                    tracing::warn!("KV prefix spill failed (dropping instead): {e}");
+                }
             }
             cache.cache.clear();
             n_evicted += 1;
@@ -587,9 +605,11 @@ impl PrefixCacheManagerV2 {
     }
 
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
+    /// Only prefixes stored under the same `salt` match.
     pub fn search_for_matching_cache(
         &mut self,
         toks: &[u32],
+        salt: Option<&str>,
         image_hashes: Option<&[u64]>,
         audio_hashes: Option<&[u64]>,
         video_hashes: Option<&[u64]>,
@@ -605,7 +625,7 @@ impl PrefixCacheManagerV2 {
             return Ok(None);
         }
 
-        let toks = Tokens(toks.to_vec());
+        let toks = Tokens::new(salt, toks);
 
         let mut best_match: Option<(usize, &CacheElement, usize, usize, usize)> = None;
         for (k, v) in &self.caches {
@@ -703,7 +723,7 @@ impl PrefixCacheManagerV2 {
             videos_match_until,
         )) = best_match
         {
-            let new_toks = toks.0[match_len..].to_vec();
+            let new_toks = toks.toks[match_len..].to_vec();
             if new_toks.is_empty() {
                 return Ok(None);
             }
@@ -985,6 +1005,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )?;
 
         match hit {
@@ -1031,6 +1052,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )?;
         match hit {
             Some(MatchingCache::Normal {
@@ -1047,7 +1069,8 @@ mod tests {
         }
 
         // The request diverges at token 5: the state holds tokens it never sent.
-        let miss = cached(7)?.search_for_matching_cache(&[1, 2, 3, 4, 99], None, None, None)?;
+        let miss =
+            cached(7)?.search_for_matching_cache(&[1, 2, 3, 4, 99], None, None, None, None)?;
         assert!(
             miss.is_none(),
             "restored recurrent state past the shared prefix"
@@ -1072,6 +1095,7 @@ mod tests {
 
         let hit = prefix_cacher.search_for_matching_cache(
             &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            None,
             None,
             None,
             None,
@@ -1236,7 +1260,7 @@ mod tests {
             PrefixCacheManagerV2::new(8, false, false).with_disk_cache(disk, test_limits());
         assert_eq!(mgr2.restore_from_disk(&Device::Cpu)?, 2);
 
-        let hit = mgr2.search_for_matching_cache(&[1, 2, 3, 99], None, None, None)?;
+        let hit = mgr2.search_for_matching_cache(&[1, 2, 3, 99], None, None, None, None)?;
         match hit {
             Some(MatchingCache::Normal { toks, offset, .. }) => {
                 assert_eq!(offset, 3);
@@ -1245,6 +1269,67 @@ mod tests {
             None => panic!("restored prefix should match"),
         }
         Ok(())
+    }
+
+    /// The sequence-level cache keys every prefix by its request's salt, in memory and on disk.
+    mod kv_isolation {
+        use super::{test_limits, DiskKvCache, PrefixCacheManagerV2};
+        use crate::sequence::test_sequence;
+        use hanzo_ml::Device;
+
+        fn store(mgr: &mut PrefixCacheManagerV2, salt: Option<&str>, tokens: &[u32]) {
+            let mut seq = test_sequence(tokens.to_vec(), None);
+            seq.set_cache_salt(salt.map(str::to_owned));
+            mgr.add_sequence(&mut seq, None);
+        }
+
+        fn hit(mgr: &mut PrefixCacheManagerV2, salt: Option<&str>, tokens: &[u32]) -> bool {
+            mgr.search_for_matching_cache(tokens, salt, None, None, None)
+                .unwrap()
+                .is_some()
+        }
+
+        #[test]
+        fn a_salted_prefix_serves_only_its_salt() {
+            let mut mgr = PrefixCacheManagerV2::new(8, false, false);
+            store(&mut mgr, Some("acme"), &[1, 2, 3, 4]);
+            assert!(hit(&mut mgr, Some("acme"), &[1, 2, 3, 4, 5]));
+            assert!(!hit(&mut mgr, Some("evil"), &[1, 2, 3, 4, 5]));
+            assert!(!hit(&mut mgr, None, &[1, 2, 3, 4, 5]));
+        }
+
+        #[test]
+        fn tenants_with_identical_prompts_keep_separate_entries() {
+            let mut mgr = PrefixCacheManagerV2::new(8, false, false);
+            store(&mut mgr, Some("acme"), &[1, 2, 3, 4]);
+            store(&mut mgr, Some("evil"), &[1, 2, 3, 4]);
+            store(&mut mgr, None, &[1, 2, 3, 4]);
+            assert_eq!(mgr.counts().0, 3, "one tenant's entry replaced another's");
+        }
+
+        /// A spill file is keyed by its tokens alone and restores unsalted, so a salted prefix
+        /// must never reach disk.
+        #[test]
+        fn a_salted_prefix_never_spills() -> hanzo_ml::Result<()> {
+            let tmp = tempfile::tempdir().unwrap();
+            {
+                let disk = DiskKvCache::new(tmp.path(), 64).unwrap();
+                let mut mgr =
+                    PrefixCacheManagerV2::new(0, false, false).with_disk_cache(disk, test_limits());
+                store(&mut mgr, Some("acme"), &[1, 2, 3, 4]);
+                store(&mut mgr, None, &[9, 8, 7]);
+                assert_eq!(mgr.evict_caches()?, 2);
+            }
+            let disk = DiskKvCache::new(tmp.path(), 64).unwrap();
+            let mut restored =
+                PrefixCacheManagerV2::new(8, false, false).with_disk_cache(disk, test_limits());
+            assert_eq!(restored.restore_from_disk(&Device::Cpu)?, 1);
+            assert!(hit(&mut restored, None, &[9, 8, 7, 6]));
+            for salt in [None, Some("acme"), Some("evil")] {
+                assert!(!hit(&mut restored, salt, &[1, 2, 3, 4, 5]));
+            }
+            Ok(())
+        }
     }
 
     // --- Negative / fuzz: crafted payloads must Err or skip, never OOM/panic. ---
@@ -1306,7 +1391,7 @@ mod tests {
             "foreign-model KV must not restore"
         );
         assert!(mgr_b
-            .search_for_matching_cache(&[1, 2, 3, 9], None, None, None)?
+            .search_for_matching_cache(&[1, 2, 3, 9], None, None, None, None)?
             .is_none());
         Ok(())
     }
