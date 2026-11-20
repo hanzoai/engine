@@ -217,7 +217,7 @@ Function tools in Responses requests also accept `strict: true` and use the same
 
 ### `GET /v1/responses/{id}`
 
-Retrieve a response by id.
+Retrieve a response by id. Responses belong to the org in `X-Org-Id` when they were created; this and the two calls below find only the caller's org's responses and answer 404 for any other id.
 
 ### `DELETE /v1/responses/{id}`
 

@@ -47,6 +47,10 @@ const QUEUE_SHORT: Duration = Duration::from_secs(5);
 /// generation through the scheduler, which waits behind a long
 /// prefill and would evict the one replica able to serve it.
 const HEALTH_PATH: &str = "/v1/models";
+/// The caller's org, set by the private cloud gateway in front of the router.
+const ORG_HEADER: &str = "x-org-id";
+/// The paths whose bodies carry `cache_salt` to the prefix cache behind them.
+const SALTED_PATHS: [&str; 2] = ["/v1/chat/completions", "/v1/completions"];
 /// Response header naming the replica that served the request (observability).
 const REPLICA_HEADER: &str = "x-replica-id";
 const CONV_HEADERS: [&str; 5] = [
@@ -416,6 +420,7 @@ async fn dispatch(
                 }
                 normalize_reasoning_effort(&mut rewritten);
                 normalize_messages(&mut rewritten);
+                partition_prefix_cache(&mut rewritten, &path_q, &parts.headers);
                 Bytes::from(serde_json::to_vec(&rewritten).expect("JSON value"))
             }
             _ => body_bytes.clone(),
@@ -791,6 +796,35 @@ fn normalize_reasoning_effort(val: &mut Value) {
 /// Any non-leading system message (e.g. injected developer prompts, tool results,
 /// or system reminders mid-conversation) has its role changed to "user" with a "[System]: "
 /// prefix so backends with strict Jinja templates (like Qwen) do not reject the turn.
+/// A replica shares cached prefix blocks between any two requests with equal `cache_salt`, so each
+/// org gets its own: the gateway's org, then the salt the request asked for, encoded together as
+/// Hanzo Engine encodes them so a client's salt can never name another org's partition.
+fn partition_prefix_cache(body: &mut Value, path: &str, headers: &HeaderMap) {
+    let path = path.split('?').next().unwrap_or(path);
+    let Some(obj) = body
+        .as_object_mut()
+        .filter(|_| SALTED_PATHS.contains(&path))
+    else {
+        return;
+    };
+    let org = headers
+        .get(ORG_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|org| !org.is_empty());
+    let requested = obj
+        .get("cache_salt")
+        .and_then(Value::as_str)
+        .filter(|salt| !salt.is_empty())
+        .map(str::to_owned);
+    if org.is_none() && requested.is_none() {
+        obj.remove("cache_salt");
+        return;
+    }
+    let salt = serde_json::json!([org, requested]).to_string();
+    obj.insert("cache_salt".into(), Value::String(salt));
+}
+
 fn normalize_messages(val: &mut Value) {
     if let Some(obj) = val.as_object_mut() {
         if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
@@ -1268,6 +1302,65 @@ async fn probe_loop(state: Arc<ProxyState>, interval: Duration) {
 mod tests {
     use super::*;
     use axum::http::HeaderName;
+
+    mod kv_isolation {
+        use super::*;
+
+        fn salted(org: Option<&str>, body: Value, path: &str) -> Value {
+            let mut hdrs = HeaderMap::new();
+            if let Some(org) = org {
+                hdrs.insert(ORG_HEADER, org.parse().unwrap());
+            }
+            let mut body = body;
+            partition_prefix_cache(&mut body, path, &hdrs);
+            body
+        }
+
+        fn salt(org: Option<&str>, requested: Option<&str>) -> Value {
+            let body = match requested {
+                Some(s) => serde_json::json!({"model": "m", "cache_salt": s}),
+                None => serde_json::json!({"model": "m"}),
+            };
+            salted(org, body, "/v1/chat/completions")["cache_salt"].clone()
+        }
+
+        #[test]
+        fn orgs_get_their_own_prefix_cache() {
+            let acme = salt(Some("acme"), None);
+            assert!(acme.is_string());
+            assert_ne!(acme, salt(Some("evil"), None));
+            assert_eq!(acme, salt(Some(" acme "), None));
+            assert_eq!(salt(None, None), Value::Null);
+            assert_eq!(salt(Some(" "), Some("")), Value::Null);
+        }
+
+        #[test]
+        fn a_client_salt_cannot_reach_another_orgs_cache() {
+            let acme = salt(Some("acme"), None);
+            let forged = acme.as_str().unwrap();
+            for salt in [
+                salt(None, Some(forged)),
+                salt(Some("evil"), Some(forged)),
+                salt(Some("evil"), Some("acme")),
+                salt(None, Some("acme")),
+            ] {
+                assert_ne!(salt, acme);
+            }
+            let narrowed = salt(Some("acme"), Some("user-7"));
+            assert_ne!(narrowed, acme);
+            assert_eq!(narrowed, salt(Some("acme"), Some("user-7")));
+        }
+
+        #[test]
+        fn completions_are_salted_and_other_paths_are_left_alone() {
+            let body = serde_json::json!({"model": "m", "prompt": "p"});
+            let completions = salted(Some("acme"), body.clone(), "/v1/completions?x=1");
+            assert_eq!(completions["cache_salt"], salt(Some("acme"), None));
+            for path in ["/v1/messages", "/v1/embeddings", "/v1/responses"] {
+                assert_eq!(salted(Some("acme"), body.clone(), path), body, "{path}");
+            }
+        }
+    }
 
     #[tokio::test]
     async fn slow_headers_send_pings_preserve_errors_and_cancel_leases() {
@@ -2059,6 +2152,66 @@ mod e2e {
             text.contains("\"model\":\"default\""),
             "client model must be rewritten to `default` upstream, got: {text}"
         );
+    }
+
+    async fn echo_salt(axum::Json(v): axum::Json<serde_json::Value>) -> Response {
+        let salt = v.get("cache_salt").cloned().unwrap_or(Value::Null);
+        axum::Json(serde_json::json!({ "cache_salt": salt })).into_response()
+    }
+
+    #[tokio::test]
+    async fn kv_isolation_each_org_reaches_the_replica_in_its_own_partition() {
+        let app = Router::new()
+            .route("/v1/models", get(|| async { "ok" }))
+            .route("/v1/chat/completions", post(echo_salt));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let balancer = Balancer::new(64);
+        balancer.register("qwen", Replica::new(format!("http://{addr}")));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let paddr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            serve_listener(listener, balancer, Duration::from_secs(60), None)
+                .await
+                .unwrap()
+        });
+        let base = format!("http://{paddr}");
+        let client = reqwest::Client::new();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let ask = |org: &'static str, salt: Option<String>| {
+            let client = client.clone();
+            let base = base.clone();
+            async move {
+                let mut body = serde_json::json!({
+                    "model": "qwen",
+                    "messages": [{"role": "user", "content": "the shared system prompt"}]
+                });
+                if let Some(salt) = salt {
+                    body["cache_salt"] = Value::String(salt);
+                }
+                let resp = client
+                    .post(format!("{base}/v1/chat/completions"))
+                    .header(ORG_HEADER, org)
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap();
+                let v: Value = resp.json().await.unwrap();
+                v["cache_salt"].as_str().unwrap_or_default().to_owned()
+            }
+        };
+        let acme = ask("acme", None).await;
+        assert!(
+            !acme.is_empty(),
+            "the replica got no cache_salt for org acme"
+        );
+        assert_eq!(acme, ask("acme", None).await);
+        assert_ne!(acme, ask("evil", None).await);
+        assert_ne!(acme, ask("evil", Some(acme.clone())).await);
+        assert_ne!(acme, ask("evil", Some("acme".into())).await);
     }
 
     #[tokio::test]

@@ -1,6 +1,8 @@
 //! ## Background task management for the Responses API.
 //!
 //! This module handles background processing of responses when `background: true` is set.
+//! A task belongs to the org that created it (`tenant::org`); the calls a client reaches by
+//! response ID (get, delete, cancel) name the caller's org and find only that org's tasks.
 
 use std::{
     collections::HashMap,
@@ -33,6 +35,8 @@ pub enum BackgroundTaskState {
 pub struct BackgroundTask {
     /// Task ID (same as response ID)
     pub id: String,
+    /// The org that created the task
+    pub owner: Option<String>,
     /// Current state
     pub state: BackgroundTaskState,
     /// Created timestamp
@@ -45,7 +49,7 @@ pub struct BackgroundTask {
 
 impl BackgroundTask {
     /// Create a new background task
-    pub fn new(id: String, model: String) -> Self {
+    pub fn new(id: String, owner: Option<String>, model: String) -> Self {
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -53,6 +57,7 @@ impl BackgroundTask {
 
         Self {
             id,
+            owner,
             state: BackgroundTaskState::Queued,
             created_at,
             model,
@@ -103,10 +108,10 @@ impl BackgroundTaskManager {
         }
     }
 
-    /// Create a new background task and return its ID
-    pub fn create_task(&self, model: String) -> String {
+    /// Create a new background task owned by `owner` and return its ID
+    pub fn create_task(&self, owner: Option<String>, model: String) -> String {
         let id = format!("resp_{}", Uuid::new_v4());
-        let task = BackgroundTask::new(id.clone(), model);
+        let task = BackgroundTask::new(id.clone(), owner, model);
 
         let mut tasks = self.tasks.write().unwrap();
         tasks.insert(id.clone(), task);
@@ -120,10 +125,13 @@ impl BackgroundTaskManager {
         tasks.get(id).cloned()
     }
 
-    /// Get the response resource for a task
-    pub fn get_response(&self, id: &str) -> Option<ResponseResource> {
+    /// Get the response resource for `owner`'s task
+    pub fn get_response(&self, owner: Option<&str>, id: &str) -> Option<ResponseResource> {
         let tasks = self.tasks.read().unwrap();
-        tasks.get(id).map(|t| t.to_response_resource())
+        tasks
+            .get(id)
+            .filter(|t| t.owner.as_deref() == owner)
+            .map(|t| t.to_response_resource())
     }
 
     /// Update task to in_progress state
@@ -159,10 +167,10 @@ impl BackgroundTaskManager {
         }
     }
 
-    /// Request cancellation of a task
-    pub fn request_cancel(&self, id: &str) -> bool {
+    /// Request cancellation of `owner`'s task
+    pub fn request_cancel(&self, owner: Option<&str>, id: &str) -> bool {
         let mut tasks = self.tasks.write().unwrap();
-        if let Some(task) = tasks.get_mut(id) {
+        if let Some(task) = tasks.get_mut(id).filter(|t| t.owner.as_deref() == owner) {
             if matches!(
                 task.state,
                 BackgroundTaskState::Queued | BackgroundTaskState::InProgress
@@ -191,10 +199,14 @@ impl BackgroundTaskManager {
         }
     }
 
-    /// Delete a task
-    pub fn delete_task(&self, id: &str) -> bool {
+    /// Delete `owner`'s task
+    pub fn delete_task(&self, owner: Option<&str>, id: &str) -> bool {
         let mut tasks = self.tasks.write().unwrap();
-        tasks.remove(id).is_some()
+        if tasks.get(id).is_some_and(|t| t.owner.as_deref() == owner) {
+            tasks.remove(id);
+            return true;
+        }
+        false
     }
 
     /// List all task IDs
@@ -230,6 +242,7 @@ impl Clone for BackgroundTask {
     fn clone(&self) -> Self {
         Self {
             id: self.id.clone(),
+            owner: self.owner.clone(),
             state: self.state.clone(),
             created_at: self.created_at,
             model: self.model.clone(),
@@ -254,7 +267,7 @@ mod tests {
     #[test]
     fn test_create_and_get_task() {
         let manager = BackgroundTaskManager::new();
-        let id = manager.create_task("test-model".to_string());
+        let id = manager.create_task(None, "test-model".to_string());
 
         let task = manager.get_task(&id).unwrap();
         assert_eq!(task.id, id);
@@ -264,7 +277,7 @@ mod tests {
     #[test]
     fn test_task_state_transitions() {
         let manager = BackgroundTaskManager::new();
-        let id = manager.create_task("test-model".to_string());
+        let id = manager.create_task(None, "test-model".to_string());
 
         // Move to in_progress
         assert!(manager.mark_in_progress(&id));
@@ -281,15 +294,35 @@ mod tests {
     #[test]
     fn test_cancel_task() {
         let manager = BackgroundTaskManager::new();
-        let id = manager.create_task("test-model".to_string());
+        let id = manager.create_task(None, "test-model".to_string());
 
         // Request cancellation
-        assert!(manager.request_cancel(&id));
+        assert!(manager.request_cancel(None, &id));
         assert!(manager.is_cancel_requested(&id));
 
         // Mark as cancelled
         assert!(manager.mark_cancelled(&id));
         let task = manager.get_task(&id).unwrap();
         assert!(matches!(task.state, BackgroundTaskState::Cancelled));
+    }
+
+    mod kv_isolation {
+        use super::*;
+
+        #[test]
+        fn another_org_cannot_read_cancel_or_delete_a_task() {
+            let manager = BackgroundTaskManager::new();
+            let id = manager.create_task(Some("acme".into()), "m".into());
+            for caller in [Some("evil"), None] {
+                assert!(manager.get_response(caller, &id).is_none(), "{caller:?}");
+                assert!(!manager.request_cancel(caller, &id), "{caller:?}");
+                assert!(!manager.delete_task(caller, &id), "{caller:?}");
+            }
+            assert!(!manager.is_cancel_requested(&id));
+            assert!(manager.get_response(Some("acme"), &id).is_some());
+            assert!(manager.request_cancel(Some("acme"), &id));
+            assert!(manager.delete_task(Some("acme"), &id));
+            assert!(manager.get_response(Some("acme"), &id).is_none());
+        }
     }
 }

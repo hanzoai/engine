@@ -869,6 +869,8 @@ pub struct OpenResponsesStreamer {
     output_item_added: bool,
     /// Store flag
     store: bool,
+    /// The org the stored history belongs to
+    owner: Option<String>,
     /// Conversation history for storage
     conversation_history: Option<Vec<Message>>,
     /// Callback when done
@@ -913,12 +915,19 @@ impl OpenResponsesStreamer {
             content_part_added: false,
             output_item_added: false,
             store,
+            owner: None,
             conversation_history,
             on_done: None,
             events: Vec::new(),
             first_call: FirstCall::new(request_context.parallel_tool_calls == Some(false)),
             request_context,
         }
+    }
+
+    /// Stores the conversation history as `owner`'s
+    pub fn owned_by(mut self, owner: Option<String>) -> Self {
+        self.owner = owner;
+        self
     }
 
     /// Build initial response resource
@@ -1028,6 +1037,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         }
 
                         let _ = cache.store_conversation_history(
+                            self.owner.as_deref(),
                             self.streaming_state.response_id.clone(),
                             history,
                         );
@@ -1490,7 +1500,7 @@ async fn parse_openresponses_request(
     state: SharedState,
     defaults: &Defaults,
     tx: Sender<Response>,
-    salt: Option<String>,
+    org: Option<String>,
 ) -> Result<(
     Request,
     bool,
@@ -1551,7 +1561,7 @@ async fn parse_openresponses_request(
     // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
-        cache.get_conversation_history(prev_id)?
+        cache.get_conversation_history(org.as_deref(), prev_id)?
     } else {
         None
     };
@@ -1672,7 +1682,7 @@ async fn parse_openresponses_request(
 
     let (mut request, is_streaming) =
         parse_chat_request(chat_request, state, defaults, tx, None, None, None).await?;
-    crate::tenant::partition(&mut request, salt);
+    crate::tenant::partition(&mut request, crate::tenant::salt(org.as_deref(), None));
     Ok((
         request,
         is_streaming,
@@ -1696,7 +1706,7 @@ pub async fn create_response(
     headers: http::HeaderMap,
     body: Result<Json<OpenResponsesCreateRequest>, JsonRejection>,
 ) -> OpenResponsesResponder {
-    let salt = crate::tenant::cache_salt(&headers, None);
+    let org = crate::tenant::org(&headers);
     let oairequest = match body {
         Ok(Json(oairequest)) => oairequest,
         Err(rejection) => {
@@ -1729,7 +1739,7 @@ pub async fn create_response(
     // Handle background processing
     if background {
         let task_manager = get_background_task_manager();
-        let task_id = task_manager.create_task(model_name.clone());
+        let task_id = task_manager.create_task(org.clone(), model_name.clone());
 
         // Return immediately with queued response
         let response = ResponseResource::new(
@@ -1755,7 +1765,7 @@ pub async fn create_response(
                     state_clone.clone(),
                     &defaults,
                     bg_tx,
-                    salt,
+                    org.clone(),
                 )
                 .await
                 {
@@ -1800,7 +1810,8 @@ pub async fn create_response(
                     // Store if requested
                     if store {
                         let cache = get_response_cache();
-                        let _ = cache.store_response(task_id.clone(), response.clone());
+                        let _ =
+                            cache.store_response(org.as_deref(), task_id.clone(), response.clone());
 
                         if let Some(mut history) = conversation_history {
                             for choice in &chat_resp.choices {
@@ -1815,7 +1826,11 @@ pub async fn create_response(
                                     });
                                 }
                             }
-                            let _ = cache.store_conversation_history(task_id.clone(), history);
+                            let _ = cache.store_conversation_history(
+                                org.as_deref(),
+                                task_id.clone(),
+                                history,
+                            );
                         }
                     }
 
@@ -1850,7 +1865,9 @@ pub async fn create_response(
     }
 
     let (request, is_streaming, conversation_history, _include_config, request_context) =
-        match parse_openresponses_request(oairequest, state.clone(), &defaults, tx, salt).await {
+        match parse_openresponses_request(oairequest, state.clone(), &defaults, tx, org.clone())
+            .await
+        {
             Ok(x) => x,
             Err(e) => return handle_request_error(state, e),
         };
@@ -1869,7 +1886,8 @@ pub async fn create_response(
             store,
             conversation_history,
             request_context,
-        );
+        )
+        .owned_by(org);
 
         OpenResponsesResponder::Sse(Sse::new(streamer).keep_alive(keep_alive()))
     } else {
@@ -1896,7 +1914,8 @@ pub async fn create_response(
                 // Store if requested
                 if store {
                     let cache = get_response_cache();
-                    let _ = cache.store_response(request_id.clone(), response.clone());
+                    let _ =
+                        cache.store_response(org.as_deref(), request_id.clone(), response.clone());
 
                     if let Some(mut history) = conversation_history {
                         for choice in &chat_resp.choices {
@@ -1911,7 +1930,8 @@ pub async fn create_response(
                                 });
                             }
                         }
-                        let _ = cache.store_conversation_history(request_id, history);
+                        let _ =
+                            cache.store_conversation_history(org.as_deref(), request_id, history);
                     }
                 }
 
@@ -1930,7 +1950,8 @@ pub async fn create_response(
 
                 if store {
                     let cache = get_response_cache();
-                    let _ = cache.store_response(request_id.clone(), response.clone());
+                    let _ =
+                        cache.store_response(org.as_deref(), request_id.clone(), response.clone());
                 }
 
                 OpenResponsesResponder::ModelError(msg.to_string(), response)
@@ -1954,17 +1975,10 @@ pub async fn create_response(
 )]
 pub async fn get_response(
     State(_state): ExtractedState,
+    headers: http::HeaderMap,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    // First check background tasks
-    let task_manager = get_background_task_manager();
-    if let Some(response) = task_manager.get_response(&response_id) {
-        return (StatusCode::OK, Json(response)).into_response();
-    }
-
-    // Then check cache
-    let cache = get_response_cache();
-    match cache.get_response(&response_id) {
+    match find_response(crate::tenant::org(&headers).as_deref(), &response_id) {
         Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
         Ok(None) => JsonError::new(format!("Response with ID '{response_id}' not found"))
             .to_response(StatusCode::NOT_FOUND),
@@ -1986,17 +2000,12 @@ pub async fn get_response(
 )]
 pub async fn delete_response(
     State(_state): ExtractedState,
+    headers: http::HeaderMap,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    // Delete from background tasks
-    let task_manager = get_background_task_manager();
-    let task_deleted = task_manager.delete_task(&response_id);
-
-    // Delete from cache
-    let cache = get_response_cache();
-    match cache.delete_response(&response_id) {
-        Ok(cache_deleted) => {
-            if task_deleted || cache_deleted {
+    match remove_response(crate::tenant::org(&headers).as_deref(), &response_id) {
+        Ok(deleted) => {
+            if deleted {
                 (
                     StatusCode::OK,
                     Json(serde_json::json!({
@@ -2029,22 +2038,42 @@ pub async fn delete_response(
 )]
 pub async fn cancel_response(
     State(_state): ExtractedState,
+    headers: http::HeaderMap,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
-    let task_manager = get_background_task_manager();
-
-    if task_manager.request_cancel(&response_id) {
-        task_manager.mark_cancelled(&response_id);
-
-        if let Some(response) = task_manager.get_response(&response_id) {
-            return (StatusCode::OK, Json(response)).into_response();
-        }
+    if let Some(response) = cancel_task(crate::tenant::org(&headers).as_deref(), &response_id) {
+        return (StatusCode::OK, Json(response)).into_response();
     }
 
     JsonError::new(format!(
         "Response with ID '{response_id}' not found or cannot be cancelled"
     ))
     .to_response(StatusCode::NOT_FOUND)
+}
+
+/// `owner`'s response `id`, from the background tasks first, then the stored responses.
+fn find_response(owner: Option<&str>, id: &str) -> Result<Option<ResponseResource>> {
+    if let Some(response) = get_background_task_manager().get_response(owner, id) {
+        return Ok(Some(response));
+    }
+    get_response_cache().get_response(owner, id)
+}
+
+/// Deletes `owner`'s response `id` wherever it lives; false when `owner` has none.
+fn remove_response(owner: Option<&str>, id: &str) -> Result<bool> {
+    let task_deleted = get_background_task_manager().delete_task(owner, id);
+    let cache_deleted = get_response_cache().delete_response(owner, id)?;
+    Ok(task_deleted || cache_deleted)
+}
+
+/// Cancels `owner`'s queued or running background response `id`.
+fn cancel_task(owner: Option<&str>, id: &str) -> Option<ResponseResource> {
+    let task_manager = get_background_task_manager();
+    if !task_manager.request_cancel(owner, id) {
+        return None;
+    }
+    task_manager.mark_cancelled(id);
+    task_manager.get_response(owner, id)
 }
 
 /// Handle errors
@@ -2060,6 +2089,70 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    mod kv_isolation {
+        use super::*;
+
+        const ACME: Option<&str> = Some("acme");
+
+        fn stored(owner: Option<&str>) -> String {
+            let id = format!("resp_{}", Uuid::new_v4());
+            let response = ResponseResource::new(id.clone(), "m".into(), 0);
+            get_response_cache()
+                .store_response(owner, id.clone(), response)
+                .unwrap();
+            id
+        }
+
+        #[test]
+        fn a_stored_response_answers_only_its_org() {
+            let id = stored(ACME);
+            for caller in [Some("evil"), None] {
+                assert!(find_response(caller, &id).unwrap().is_none(), "{caller:?}");
+                assert!(!remove_response(caller, &id).unwrap(), "{caller:?}");
+            }
+            assert!(find_response(ACME, &id).unwrap().is_some());
+            assert!(remove_response(ACME, &id).unwrap());
+            assert!(find_response(ACME, &id).unwrap().is_none());
+        }
+
+        #[test]
+        fn a_background_response_answers_only_its_org() {
+            let tasks = get_background_task_manager();
+            let id = tasks.create_task(ACME.map(str::to_owned), "m".into());
+            for caller in [Some("evil"), None] {
+                assert!(find_response(caller, &id).unwrap().is_none(), "{caller:?}");
+                assert!(cancel_task(caller, &id).is_none(), "{caller:?}");
+                assert!(!remove_response(caller, &id).unwrap(), "{caller:?}");
+            }
+            assert!(!tasks.is_cancel_requested(&id));
+            assert!(cancel_task(ACME, &id).is_some());
+            assert!(remove_response(ACME, &id).unwrap());
+        }
+
+        #[test]
+        fn previous_response_id_reads_only_its_orgs_history() {
+            let id = format!("resp_{}", Uuid::new_v4());
+            let history = vec![Message {
+                content: Some(MessageContent::from_text("acme's prompt".into())),
+                role: "user".into(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            }];
+            let cache = get_response_cache();
+            cache
+                .store_conversation_history(ACME, id.clone(), history)
+                .unwrap();
+            assert!(cache
+                .get_conversation_history(Some("evil"), &id)
+                .unwrap()
+                .is_none());
+            assert!(cache.get_conversation_history(None, &id).unwrap().is_none());
+            assert!(cache.get_conversation_history(ACME, &id).unwrap().is_some());
+        }
+    }
 
     #[test]
     fn deserializes_multiturn_codex_openresponses_input() {

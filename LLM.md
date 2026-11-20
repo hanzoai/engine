@@ -1273,6 +1273,9 @@ prompts. The listener defaults to loopback and trusts identity from the private
 cloud gateway, not public clients. Its replica admin surface is private too.
 Cloud's existing metered relay preserves JSON metadata but not arbitrary headers;
 cloud owns the composition in `native/engine-router` and `deploy/engine-pool.yaml`.
+The router also sets `cache_salt` on `/v1/chat/completions` and `/v1/completions` bodies
+from `x-org-id` and the client's own salt, encoded as Hanzo Engine encodes them, so a
+replica's prefix cache (vLLM's included) shares blocks only within an org.
 No KV migration or engine-reported cache/queue telemetry is claimed: completed
 2xx response prefixes are locality hints. Streams release leases on EOF/error/drop;
 only pre-connect errors retry, never timeouts or partially delivered streams.

@@ -30,7 +30,7 @@ test:
   # forward wrote. A security boundary, so it runs before the workspace-wide check, which a crate
   # it does not build could turn red.
   - name: kv-isolation
-    run: cargo test -p hanzo-engine -p hanzo-server-core --lib -- kv_isolation tenant::tests
+    run: cargo test -p hanzo-engine -p hanzo-server-core -p hanzo-router --features hanzo-router/proxy --lib -- kv_isolation tenant::tests
   - name: check
     run: cargo check --workspace
 

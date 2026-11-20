@@ -20,6 +20,8 @@ For Codex configuration, see [Use Codex and Claude Code](/hanzo/guides/serve/cod
 - `DELETE /v1/responses/{id}`: delete a response.
 - `POST /v1/responses/{id}/cancel`: cancel a background response that has not finished.
 
+A stored response, its conversation history and a background response belong to the org in the request's `X-Org-Id` header, which the gateway sets from the validated caller. `GET`, `DELETE`, `/cancel` and `previous_response_id` find only the caller's own org's responses; any other id answers 404, the same as one that never existed. Requests without `X-Org-Id` share one space with each other and never see an org's responses.
+
 ## Choosing an endpoint
 
 Responses supports polling, mid-flight cancellation via `/cancel`, and background processing. Chat Completions returns the full response on a single connection.
