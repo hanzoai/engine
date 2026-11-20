@@ -306,6 +306,10 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
         return err(StatusCode::NOT_FOUND, "no replica set for model");
     };
     let mut hints = routing_hints(&parts.headers, json.as_ref());
+    // A request the router will salt is placed on a replica that honours the salt.
+    hints.partitioned = json.as_ref().is_some_and(|body| {
+        salted(parts.uri.path(), body) && cache_salt(&parts.headers, body).is_some()
+    });
     // Count with the serving tokenizer before admission. Compaction includes
     // system prompts, tool schemas, tool results and the entire conversation;
     // a character estimate alone cannot enforce a near-limit context window.
@@ -800,29 +804,41 @@ fn normalize_reasoning_effort(val: &mut Value) {
 /// org gets its own: the gateway's org, then the salt the request asked for, encoded together as
 /// Hanzo Engine encodes them so a client's salt can never name another org's partition.
 fn partition_prefix_cache(body: &mut Value, path: &str, headers: &HeaderMap) {
-    let path = path.split('?').next().unwrap_or(path);
-    let Some(obj) = body
-        .as_object_mut()
-        .filter(|_| SALTED_PATHS.contains(&path))
-    else {
+    if !salted(path, body) {
+        return;
+    }
+    let salt = cache_salt(headers, body);
+    let Some(obj) = body.as_object_mut() else {
         return;
     };
+    match salt {
+        Some(salt) => obj.insert("cache_salt".into(), Value::String(salt)),
+        None => obj.remove("cache_salt"),
+    };
+}
+
+/// A body the router writes `cache_salt` on: a JSON object sent to a salted path.
+fn salted(path: &str, body: &Value) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    body.is_object() && SALTED_PATHS.contains(&path)
+}
+
+/// The partition a salted body is given: the gateway's org and the salt the request
+/// asked for, or none when it names neither.
+fn cache_salt(headers: &HeaderMap, body: &Value) -> Option<String> {
     let org = headers
         .get(ORG_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|org| !org.is_empty());
-    let requested = obj
+    let requested = body
         .get("cache_salt")
         .and_then(Value::as_str)
-        .filter(|salt| !salt.is_empty())
-        .map(str::to_owned);
+        .filter(|salt| !salt.is_empty());
     if org.is_none() && requested.is_none() {
-        obj.remove("cache_salt");
-        return;
+        return None;
     }
-    let salt = serde_json::json!([org, requested]).to_string();
-    obj.insert("cache_salt".into(), Value::String(salt));
+    Some(serde_json::json!([org, requested]).to_string())
 }
 
 fn normalize_messages(val: &mut Value) {
@@ -978,6 +994,7 @@ fn routing_hints(headers: &HeaderMap, body: Option<&Value>) -> RoutingHints {
         approx_tokens: body.map(estimate_required_tokens).unwrap_or(0),
         token_counts: Default::default(),
         images: body.is_some_and(carries_images),
+        partitioned: false,
     }
 }
 
@@ -1181,6 +1198,8 @@ struct RegisterBody {
     upstream_model: Option<String>,
     #[serde(default)]
     queue: Option<usize>,
+    #[serde(default)]
+    cache_salt: Option<bool>,
 }
 fn registration_weight() -> u32 {
     100
@@ -1202,6 +1221,7 @@ async fn add_replica(
             roles: body.roles,
             upstream_model: body.upstream_model,
             queue: body.queue,
+            cache_salt: body.cache_salt.unwrap_or(true),
         },
     );
     Json(state.balancer.statuses())
@@ -2212,6 +2232,81 @@ mod e2e {
         assert_ne!(acme, ask("evil", None).await);
         assert_ne!(acme, ask("evil", Some(acme.clone())).await);
         assert_ne!(acme, ask("evil", Some("acme".into())).await);
+    }
+
+    /// A replica whose engine ignores `cache_salt` (Halogen) shares a cached prefix
+    /// between any two orgs that send it, so a request the router salts is placed on
+    /// the replica that honours the salt, even where the shared one would win on
+    /// weight. A request with no partition still uses the shared one.
+    #[tokio::test]
+    async fn kv_isolation_a_salted_request_skips_a_replica_that_ignores_the_salt() {
+        async fn named(name: &'static str) -> String {
+            let app = Router::new()
+                .route("/v1/models", get(|| async { "ok" }))
+                .route(
+                    "/v1/chat/completions",
+                    post(move || async move { axum::Json(serde_json::json!({ "replica": name })) }),
+                );
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            format!("http://{addr}")
+        }
+        let balancer = Balancer::new(64);
+        balancer.register(
+            "qwen",
+            Replica {
+                id: "dgx".into(),
+                weight: 100,
+                ..Replica::new(named("dgx").await)
+            },
+        );
+        balancer.register(
+            "qwen",
+            Replica {
+                id: "evo".into(),
+                weight: 1000,
+                cache_salt: false,
+                ..Replica::new(named("evo").await)
+            },
+        );
+        let base = start_proxy(balancer, Duration::from_secs(60)).await;
+        let client = reqwest::Client::new();
+        let ask = |org: Option<&'static str>, salt: Option<&'static str>| {
+            let (client, base) = (client.clone(), base.clone());
+            async move {
+                let mut body = serde_json::json!({
+                    "model": "qwen",
+                    "messages": [{"role": "user", "content": "the shared system prompt"}]
+                });
+                if let Some(salt) = salt {
+                    body["cache_salt"] = Value::String(salt.into());
+                }
+                let mut req = client.post(format!("{base}/v1/chat/completions"));
+                if let Some(org) = org {
+                    req = req.header(ORG_HEADER, org);
+                }
+                let v: Value = req.json(&body).send().await.unwrap().json().await.unwrap();
+                v["replica"].as_str().unwrap_or_default().to_owned()
+            }
+        };
+        assert_eq!(
+            ask(None, None).await,
+            "evo",
+            "an unsalted request follows weight"
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                ask(Some("acme"), None).await,
+                "dgx",
+                "an org's request reached the shared cache"
+            );
+            assert_eq!(
+                ask(None, Some("mine")).await,
+                "dgx",
+                "a salted request reached the shared cache"
+            );
+        }
     }
 
     #[tokio::test]

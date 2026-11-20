@@ -56,10 +56,24 @@ pub struct Replica {
     /// N lets N wait a few seconds. Unset, they queue as long as a stream may run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<usize>,
+    /// Whether the engine's prefix cache partitions by the `cache_salt` this router
+    /// writes per org (vLLM, Hanzo Engine). `false` is an engine whose cache shares a
+    /// prefix between any two requests that send it (Halogen 0.12.3): a request that
+    /// names an org goes there only when no replica that partitions can hold it.
+    #[serde(default = "default_cache_salt", skip_serializing_if = "is_true")]
+    pub cache_salt: bool,
 }
 
 fn default_weight() -> u32 {
     100
+}
+
+fn default_cache_salt() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 fn default_vision() -> bool {
@@ -79,6 +93,7 @@ impl Replica {
             roles: Vec::new(),
             upstream_model: None,
             queue: None,
+            cache_salt: true,
         }
     }
 

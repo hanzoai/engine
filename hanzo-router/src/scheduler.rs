@@ -24,6 +24,10 @@ pub struct RoutingHints {
     pub token_counts: HashMap<String, usize>,
     /// The request carries image input.
     pub images: bool,
+    /// The router writes this request a prefix-cache partition (`cache_salt`: the
+    /// caller's org, or a salt the caller asked for), so it belongs on a replica whose
+    /// cache honours one.
+    pub partitioned: bool,
 }
 
 impl RoutingHints {
@@ -46,6 +50,12 @@ fn serves(n: &Node, hints: &RoutingHints, excluded: &HashSet<String>) -> bool {
 /// Advertised context holds the prompt plus requested output.
 fn holds(n: &Node, hints: &RoutingHints) -> bool {
     n.replica.max_context == 0 || hints.required_tokens(&n.replica.id) <= n.replica.max_context
+}
+
+/// The replica keeps this request's cached prefixes to its own partition: the request
+/// asks for none, or the engine's prefix cache honours `cache_salt`.
+fn walls(n: &Node, hints: &RoutingHints) -> bool {
+    !hints.partitioned || n.replica.cache_salt
 }
 
 #[derive(Clone)]
@@ -176,7 +186,19 @@ impl ReplicaSet {
             .nodes
             .values()
             .any(|n| live(&n) && fits(&n) && free(&n));
-        let healthy = |n: &&Arc<Node>| live(n) && (!roomy || fits(n));
+        // A request with a cache partition is kept off a replica whose prefix cache
+        // shares across partitions (`cache_salt: false`) while any replica that walls
+        // it off is up and can hold it, busy or not: it waits for that replica's slot
+        // rather than spill to a cache another org's prompts read. Room comes first —
+        // a request only the shared replica can hold is served there, as is every
+        // request while no walled replica is up, so isolation never becomes an outage.
+        let walled = hints.partitioned
+            && inner
+                .nodes
+                .values()
+                .any(|n| live(&n) && (!roomy || fits(&n)) && walls(n, hints));
+        let healthy =
+            |n: &&Arc<Node>| live(n) && (!roomy || fits(n)) && (!walled || walls(n, hints));
         let available = |n: &&Arc<Node>| healthy(n) && free(n);
         let targetable = |n: &&Arc<Node>| live(n) && fits(n) && free(n);
         let mut selected = None;
@@ -420,6 +442,88 @@ mod tests {
         for _ in 0..4 {
             assert_eq!(pick(&p, &h, now).id(), "spark");
         }
+    }
+
+    fn shared_pool() -> ReplicaSet {
+        let mut dgx = Replica::new("dgx");
+        dgx.capacity = 1;
+        dgx.max_context = 262_144;
+        let mut evo = Replica::new("evo");
+        evo.capacity = 4;
+        evo.weight = 1000;
+        evo.max_context = 655_360;
+        evo.cache_salt = false;
+        ReplicaSet::new([dgx, evo], 8)
+    }
+
+    fn partitioned(session: &str) -> RoutingHints {
+        RoutingHints {
+            partitioned: true,
+            ..hints(session)
+        }
+    }
+
+    #[test]
+    fn kv_isolation_a_partitioned_request_waits_for_a_walled_replica() {
+        let p = shared_pool();
+        let now = Instant::now();
+        // Without a partition, weight decides and the shared cache is fine.
+        assert_eq!(pick(&p, &hints("plain"), now).id(), "evo");
+        // With one, the replica that honours cache_salt serves it...
+        let held = pick(&p, &partitioned("acme-1"), now);
+        assert_eq!(held.id(), "dgx");
+        // ...and while its one slot is held the next waits rather than spill onto
+        // the cache other orgs' prompts are read from.
+        assert!(p
+            .pick_agent(&partitioned("acme-2"), &HashSet::new(), now)
+            .is_none());
+        assert!(p.queue(&partitioned("acme-2"), &HashSet::new()).is_some());
+        drop(held);
+        assert_eq!(pick(&p, &partitioned("acme-2"), now).id(), "dgx");
+    }
+
+    #[test]
+    fn kv_isolation_a_session_pinned_to_a_shared_cache_moves_once_it_is_partitioned() {
+        let p = shared_pool();
+        let now = Instant::now();
+        let mut h = hints("agent");
+        assert_eq!(pick(&p, &h, now).id(), "evo");
+        h.partitioned = true;
+        assert_eq!(pick(&p, &h, now).id(), "dgx");
+    }
+
+    #[test]
+    fn kv_isolation_the_shared_replica_still_serves_what_nothing_else_can() {
+        let p = shared_pool();
+        let now = Instant::now();
+        // Only evo holds a 300k-token request: room comes first.
+        let mut big = partitioned("long");
+        big.approx_tokens = 300_000;
+        assert_eq!(pick(&p, &big, now).id(), "evo");
+        // dgx down is not an outage for partitioned traffic.
+        p.mark_unhealthy("dgx");
+        assert_eq!(pick(&p, &partitioned("outage"), now).id(), "evo");
+        p.mark_healthy("dgx");
+        assert_eq!(pick(&p, &partitioned("back"), now).id(), "dgx");
+    }
+
+    #[test]
+    fn kv_isolation_cache_salt_defaults_on_and_round_trips() {
+        let cfg: crate::replica::BalancerConfig = serde_yaml::from_str(
+            "models:\n  m:\n  - id: dgx\n    url: http://a\n  - id: evo\n    url: http://b\n    cache_salt: false\n",
+        )
+        .unwrap();
+        assert!(
+            cfg.models["m"][0].cache_salt,
+            "an engine is taken to honour cache_salt unless the pool says not"
+        );
+        assert!(!cfg.models["m"][1].cache_salt);
+        let yaml = serde_yaml::to_string(&cfg).unwrap();
+        assert_eq!(
+            yaml.matches("cache_salt").count(),
+            1,
+            "only the exception is written back: {yaml}"
+        );
     }
 
     #[test]
