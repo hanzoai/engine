@@ -135,9 +135,12 @@ half of `required`, and the agentic file-surfacing commits, which live in a `she
 - **One image**: `hanzo.yml` declares `ghcr.io/hanzoai/engine` from `Dockerfile`, linux/amd64, holding
   `hanzo-server` alone (the deployment's command). A release is the version in `Cargo.toml` and the 18
   workspace entries of `Cargo.lock`, a `release: hanzo-engine X` commit and a `vX` tag.
-- **Nothing builds on a push or a tag**: GitHub Actions is off on hanzoai/engine
-  (`gh api repos/hanzoai/engine/actions/permissions` answers `enabled: false`), and `cargo fmt --check`
-  is red across the workspace on main. The image is asked of the door directly, as org hanzo:
+- **CI runs on the forge, after the mirror syncs.** GitHub Actions is off on hanzoai/engine
+  (`gh api repos/hanzoai/engine/actions/permissions` answers `enabled: false`). git.hanzo.ai pulls the
+  repo and runs `.hanzo/workflows/`: `cicd.yml` on main and `v*` (the `hanzo.yml` gates, then the image
+  through the build door) and `release.yml` on `vX.Y.Z` (the binaries). The forge reads only the first of
+  `.hanzo/workflows` and `.github/workflows` that exists, so nothing under `.github/workflows` runs
+  anywhere. PRs live on GitHub and are not gated. To build by hand, ask the door directly, as org hanzo:
   `POST https://api.hanzo.ai/v1/build` with `{repo, sha, image: ghcr.io/hanzoai/engine:X, tags: [vX],
   dockerfile: Dockerfile, context: ., platforms: [linux/amd64]}` (bearer `hanzo --as hanzo auth token`,
   `X-Org-Id: hanzo`), then `GET /v1/build/<id>`. A 429 is the org's concurrent-build limit.

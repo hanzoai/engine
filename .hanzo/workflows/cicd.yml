@@ -1,0 +1,22 @@
+# Canonical caller: every knob lives in /hanzo.yml, none here.
+# Hanzo Git reads only the first of .hanzo/workflows and .github/workflows that exists, so a caller under
+# .github/workflows is never seen while release.yml lives here, and github.com has no runner for it either.
+name: CI/CD
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  cicd:
+    # Pinned to the release hanzo-inc/cloud's caller runs; `@v2` rides hanzoai/ci main.
+    uses: hanzoai/ci/.github/workflows/build.yml@v2.1.21
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    with:
+      # The gates compile hanzo-engine's tests and type-check every crate, too slow for a shared 1.5-core slot.
+      class: xl
+    secrets: inherit
