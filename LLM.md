@@ -637,6 +637,10 @@ See `docs/` directory for detailed documentation on specific models and features
   An unsupported setting (`include_prompt: false`, no mode) fails at load, not at the first request.
 - **`dimensions`** keeps the leading values and L2-normalizes them again (Matryoshka); 422 above
   the model's width. Meaningful for EmbeddingGemma 2 (768/512/256/128) and Qwen3 Embedding.
+- **An input the model cannot read is refused**, not embedded: `add_request::unreadable_input` refuses an
+  image (`input: {image_url}`) when the pipeline's input modalities lack Vision. Before, the image ran as its
+  one placeholder token and a text embedder answered 200 with 768 zeros. `/v1/embeddings` answers every
+  engine `ValidationError` 422 (`Refused` in `embeddings.rs`); it used to fold them into a 500.
 - **Revision**: a multi-model config entry takes `revision` (hanzo-server's JSON, server-core
   `ModelConfig::revision`), passed to `load_model_from_hf`; a commit pins the weights an index was
   built from. Single-model mode and the CLI's TOML config load `main`.

@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use crate::{
     diffusion_models::animation::AnimationGenerationParams,
-    pipeline::{KvCache, NormalCache},
+    pipeline::{KvCache, NormalCache, SupportedModality},
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
@@ -156,6 +156,20 @@ impl Engine {
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
             }
+        }
+
+        let input = get_mut_arcmutex!(self.pipeline)
+            .get_metadata()
+            .modalities
+            .input
+            .clone();
+        if let Some(refusal) = unreadable_input(&request.messages, &input) {
+            request
+                .response
+                .send(Response::ValidationError(refusal.into()))
+                .await
+                .unwrap_or_else(|_| warn!("Receiver disconnected"));
+            return;
         }
 
         let images = match request.messages {
@@ -1022,6 +1036,20 @@ impl Engine {
     }
 }
 
+/// The refusal for an input the model has no encoder for. An image sent to a text embedder would
+/// otherwise run as its one placeholder token and answer a vector of zeros.
+fn unreadable_input(
+    messages: &RequestMessage,
+    input: &[SupportedModality],
+) -> Option<&'static str> {
+    match messages {
+        RequestMessage::EmbeddingImage { .. } if !input.contains(&SupportedModality::Vision) => {
+            Some("This model embeds text only and cannot read an image. Send text, or use an image embedding model.")
+        }
+        _ => None,
+    }
+}
+
 /// Refuses a prompt, or a `max_tokens`, the context cannot hold. `prompt` is the
 /// whole prompt the model reads, media expansion and a forced call's opening included.
 fn check_fit(prompt: usize, context: usize, max_tokens: Option<usize>) -> Result<(), String> {
@@ -1042,7 +1070,24 @@ fn check_fit(prompt: usize, context: usize, max_tokens: Option<usize>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::check_fit;
+    use super::{check_fit, unreadable_input};
+    use crate::{pipeline::SupportedModality, RequestMessage};
+
+    #[test]
+    fn a_text_embedder_refuses_an_image() {
+        let image = || RequestMessage::EmbeddingImage {
+            images: vec![image::DynamicImage::new_rgb8(1, 1)],
+        };
+        let text = RequestMessage::Embedding {
+            prompt: "a query".into(),
+        };
+        assert!(unreadable_input(&image(), &[SupportedModality::Text]).is_some());
+        assert_eq!(
+            unreadable_input(&image(), &[SupportedModality::Vision]),
+            None
+        );
+        assert_eq!(unreadable_input(&text, &[SupportedModality::Text]), None);
+    }
 
     #[test]
     fn a_prompt_must_leave_room_for_the_requested_tokens() {

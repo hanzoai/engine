@@ -134,7 +134,7 @@ pub async fn embeddings(
             Ok(item) => item,
             Err(e) => {
                 Hanzo::maybe_log_error(state.clone(), e.as_ref());
-                return internal_error(e);
+                return failed(e);
             }
         };
         let embedding = match oairequest.dimensions {
@@ -355,7 +355,8 @@ async fn process_embedding_response(
                 prompt_tokens,
                 total_tokens,
             }),
-            Response::ValidationError(e) | Response::InternalError(e) => Err(anyhow!(e)),
+            Response::ValidationError(e) => Err(Refused(e.to_string()).into()),
+            Response::InternalError(e) => Err(anyhow!(e)),
             Response::ModelError(msg, _) => Err(anyhow!(msg)),
             Response::Done(_)
             | Response::Chunk(_)
@@ -386,12 +387,24 @@ where
     EmbeddingResponder::ValidationError(err)
 }
 
-fn internal_error<E>(err: E) -> EmbeddingResponder
-where
-    E: Into<AnyhowError>,
-{
-    let err = err.into();
-    EmbeddingResponder::InternalError(err)
+/// An input the engine refused: the caller can fix it, so it is a 422 like the handler's own checks.
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+fn failed(err: AnyhowError) -> EmbeddingResponder {
+    if err.downcast_ref::<Refused>().is_some() {
+        EmbeddingResponder::ValidationError(err)
+    } else {
+        EmbeddingResponder::InternalError(err)
+    }
 }
 
 /// The leading `dimensions` values, L2-normalized again: a Matryoshka-trained model's shorter
@@ -435,7 +448,23 @@ fn saturating_to_u32(value: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::matryoshka;
+    use super::{failed, matryoshka, Refused};
+    use anyhow::anyhow;
+    use axum::{http::StatusCode, response::IntoResponse};
+
+    #[test]
+    fn an_engine_refusal_is_a_422_and_a_fault_a_500() {
+        let refused = failed(Refused("This model embeds text only".into()).into());
+        assert_eq!(
+            refused.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let fault = failed(anyhow!("the engine stopped"));
+        assert_eq!(
+            fault.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 
     #[test]
     fn matryoshka_keeps_the_head_at_unit_length() {
