@@ -17,6 +17,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
+pub mod segment;
+pub use segment::{salted_segment_hash, SegmentDirectory, SegmentLocation, SegmentMeta};
+
 const WIRE_MAGIC: [u8; 4] = *b"HKV1";
 const OP_PULL: u8 = 1;
 const OP_PUSH: u8 = 2;
@@ -42,6 +45,14 @@ pub enum KvFabricError {
     BlockNotFound { block_hash: u64 },
     #[error("checksum mismatch on block {block_hash:#018x}")]
     ChecksumMismatch { block_hash: u64 },
+    #[error("segment {segment_hash:#018x} covers no tokens")]
+    EmptySegment { segment_hash: u64 },
+    #[error("segment {segment_hash:#018x} incomplete: {num_computed_tokens} of {num_tokens} tokens computed")]
+    IncompleteSegment {
+        segment_hash: u64,
+        num_computed_tokens: u64,
+        num_tokens: u64,
+    },
     #[error("frame size {len} exceeds maximum {MAX_FRAME_BYTES}")]
     FrameTooLarge { len: usize },
     #[error("invalid wire header or status")]
