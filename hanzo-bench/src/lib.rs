@@ -2,3 +2,4 @@
 //! measured and files it as evidence.
 pub mod board;
 pub mod measure;
+pub mod load_templates;
