@@ -1,4 +1,0 @@
-'/model\.language_model\.layers\.(\d+)\.self_attn\..*$/':
-  isq: afq3
-'/model\.language_model\.layers\.(\d+)\.mlp\..*$/':
-  isq: afq4
