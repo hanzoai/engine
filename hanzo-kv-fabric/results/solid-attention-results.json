@@ -1,0 +1,124 @@
+{
+  "schema": "hanzo-kv-solidattn/ssd-offload-results/v1",
+  "bounty": "hanzoai/engine#92 (Bounty #11, HIP-1345 §2.1)",
+  "pr": "see PR description (solidattn-ssd-offload-research branch)",
+  "date": "2026-11-18",
+  "host": {
+    "os": "Windows 11",
+    "arch": "windows/amd64",
+    "profile": "release (optimized)"
+  },
+  "workload": {
+    "description": "128k-token local Zen context at ~32 KiB KV per token (AIPC-class model: 16 layers x 4 KV heads x 128 dim x K+V x fp16) = 4 GiB of KV in 64 blocks of 64 MiB; 6 blocks resident on device, the rest SSD-backed. 96 decode steps of sparse attention: sliding window of 3 blocks (head-2..head), head advances every 8 steps, attention-sink block 0 re-read every 16 steps (block 0 is resident, so sink re-reads are free). Deterministic trace, no RNG.",
+    "tokens": 128000,
+    "kv_per_token_bytes": 32768,
+    "total_kv_gib": 4,
+    "blocks": 64,
+    "block_mib": 64,
+    "resident_blocks": 6,
+    "decode_steps": 96,
+    "window_blocks": 3,
+    "head_advance_every_steps": 8,
+    "sink_reread_every_steps": 16
+  },
+  "config": {
+    "default": {
+      "ssd_read_bps": 2000000000,
+      "ssd_io_setup_ns": 50000,
+      "staging_bytes": 536870912,
+      "decode_ns_per_block": 6000000,
+      "note": "AIPC regime: consumer NVMe SSD ~2 GB/s; iGPU attention over one 64 MiB (~512-token) block ~6 ms per decode step — the regime where prefetch I/O can hide under compute."
+    },
+    "scenario_2": {
+      "ssd_read_bps": 500000000,
+      "note": "SATA-class SSD; everything else identical."
+    }
+  },
+  "simulation_model": {
+    "per_block_completion": "A prefetch issued at step j for a block used at step i hides its I/O under the compute of steps j..i-1 (slack = cumulative compute between issue and use); only the residual (io_ns - slack) stalls at the use step. Demand fetches are synchronous: their full I/O stalls the use step.",
+    "why_not_global_drain": "A global pending-I/O drain model (idle-loop semantics) double-counts in-flight I/O as stall: an I/O that completes during step k's compute is charged to step k even when the block is not needed until step k+n, where it arrives free. The per-block completion model charges residual latency to the consuming step only.",
+    "waste_accounting": "Wasted prefetch = prefetched bytes never used before eviction PLUS prefetched-but-never-used staging bytes at end of run (unused_staged_bytes). In this trace exactly one block (12) is prefetched at step 88 and never used: 64 MiB, reported honestly in the B rows."
+  },
+  "matched_baselines": {
+    "description": "Three policies over the identical trace and identical pool: (A) demand fetch — no prefetch, synchronous SSD reads; (B) speculative — temporal-locality predictor (predict_next, k=3) stages likely blocks ahead of use; (C) next-step oracle — perfect next-step prediction issued one step before use (depth 1).",
+    "scenario_1_ssd_2gbs": {
+      "demand": { "wall_ms": 1809.6, "throughput_steps_s": 53.0, "p99_stall_ms": 33.6, "total_stall_ms": 201.6, "ssd_misses": 6, "prefetches": 0, "wasted_prefetch_mib": 0, "peak_staging_mib": 384 },
+      "speculative": { "wall_ms": 1608.0, "throughput_steps_s": 59.7, "p99_stall_ms": 0.0, "total_stall_ms": 0.0, "ssd_misses": 0, "prefetches": 7, "wasted_prefetch_mib": 64, "peak_staging_mib": 448 },
+      "depth1_oracle": { "wall_ms": 1701.6, "throughput_steps_s": 56.4, "p99_stall_ms": 15.6, "total_stall_ms": 93.6, "ssd_misses": 0, "prefetches": 6, "wasted_prefetch_mib": 0, "peak_staging_mib": 384 },
+      "spec_vs_demand_x": 1.13,
+      "oracle_vs_demand_x": 1.06
+    },
+    "scenario_2_ssd_500mbs": {
+      "demand": { "wall_ms": 2413.6, "throughput_steps_s": 39.8, "p99_stall_ms": 134.3, "total_stall_ms": 805.6, "ssd_misses": 6, "prefetches": 0, "wasted_prefetch_mib": 0, "peak_staging_mib": 384 },
+      "speculative": { "wall_ms": 1657.6, "throughput_steps_s": 57.9, "p99_stall_ms": 8.3, "total_stall_ms": 49.6, "ssd_misses": 0, "prefetches": 7, "wasted_prefetch_mib": 64, "peak_staging_mib": 448 },
+      "depth1_oracle": { "wall_ms": 2305.6, "throughput_steps_s": 41.6, "p99_stall_ms": 116.3, "total_stall_ms": 697.6, "ssd_misses": 0, "prefetches": 6, "wasted_prefetch_mib": 0, "peak_staging_mib": 384 },
+      "spec_vs_demand_x": 1.46,
+      "oracle_vs_demand_x": 1.05
+    },
+    "claim": "Speculative prefetch (temporal-locality predictor, implicit prefetch depth of up to 8 steps) cuts decode wall time 1.13x on a 2 GB/s NVMe SSD and 1.46x on a 500 MB/s SATA SSD vs demand fetch, while total SSD bytes read are identical (7 prefetched vs 6 demand misses + resident sink: +1 wasted block = 64 MiB, honestly reported)."
+  },
+  "finding_depth_beats_accuracy": {
+    "observation": "The depth-1 oracle — PERFECT next-step prediction — is SLOWER than the imperfect predictor (1701.6 vs 1608.0 ms on 2 GB/s; 2305.6 vs 1657.6 ms on 500 MB/s).",
+    "explanation": "The oracle issues its prefetch one step before use (depth 1). A 134 ms SATA block read cannot hide under one 18 ms (3-block) decode step, so even perfect prediction stalls. The recency predictor issues at window-epoch start (implicit depth up to 8 steps), giving the I/O several steps of compute to hide under. PREFETCH DEPTH dominates hiding; prediction accuracy is secondary in this regime.",
+    "implication": "For engine integration: schedule prefetches as early as residency/locality allows; do not tune the predictor for accuracy at the cost of issue depth.",
+    "honesty": "The depth-1 oracle is therefore NOT a wall-clock upper bound and is labeled 'next-step oracle (perfect prediction, depth 1)', not 'upper bound'."
+  },
+  "metric_honesty": {
+    "simulation": "Per-block I/O latencies are configured rates (2 GB/s / 500 MB/s + 50 µs setup), not measured device I/O; decode compute is a configured 6 ms per 64 MiB block per step. Engine integration must replace these with measured Hanzo-hardware rates.",
+    "policy_layer": "The access trace is an INPUT: which blocks sparse attention actually reads (and any answer-quality effect) is the engine's job. This PR measures I/O orchestration only.",
+    "answer_quality": "NOT measured — no attention path exists at the fabric policy layer. The bounty's answer-quality regression item requires the engine integration and is listed as follow-up."
+  },
+  "hypotheses": [
+    {
+      "id": "S1",
+      "text": "Demand fetch stalls decode whenever an offload-block read exceeds the step's compute (cold head-of-line per step)",
+      "expected_failure_mode": "if decode compute per block exceeded SSD block latency, demand fetches would hide naturally and prefetch would add nothing",
+      "observed": "confirmed: 6 demand misses cost 201.6 ms total stall (2 GB/s) / 805.6 ms (500 MB/s)"
+    },
+    {
+      "id": "S2",
+      "text": "Speculative prefetch issued several steps ahead hides SSD reads under decode compute, cutting wall time with equal-or-plus-minor wasted bytes",
+      "expected_failure_mode": "if the predictor mispredicted late (issued too close to use), residual stall would appear — exactly what the depth-1 oracle demonstrates",
+      "observed": "confirmed: wall 1.13x / 1.46x vs demand; total stall 201.6->0.0 ms (2 GB/s), 805.6->49.6 ms (500 MB/s); cost = one wasted 64 MiB prefetch"
+    },
+    {
+      "id": "S3",
+      "text": "Perfect prediction at depth 1 is insufficient — depth, not accuracy, dominates hiding",
+      "expected_failure_mode": "if SSD latency were small relative to one step's compute, a depth-1 oracle would fully hide and beat the predictor",
+      "observed": "confirmed: depth-1 oracle still stalls (93.6 ms total at 2 GB/s; 697.6 ms at 500 MB/s) and is SLOWER than the depth-8 predictor"
+    },
+    {
+      "id": "S4",
+      "text": "CacheSalt isolation holds at the offload tier: identical block indices under different tenant salts are disjoint keys",
+      "expected_failure_mode": "a collision in the key mixer would let one tenant read another's staged block",
+      "observed": "confirmed by test salted_keys_isolate_tenants (SplitMix64 salted_block_key)"
+    }
+  ],
+  "tests": {
+    "count": 7,
+    "names": [
+      "salted_keys_isolate_tenants",
+      "predictor_prefers_sequential_successor",
+      "fetch_resident_is_free",
+      "fetch_miss_pays_ssd_then_stages",
+      "staging_budget_is_enforced_lru",
+      "wasted_prefetch_counts_unused_evictions",
+      "overlap_hides_io_under_compute"
+    ],
+    "result": "cargo test green on windows/amd64, stdlib-only"
+  },
+  "out_of_scope": [
+    "sparse attention algorithms: which blocks attention reads is the engine's job (the trace is an input here)",
+    "answer-quality regression: no attention path at the fabric policy layer; requires engine integration (bounty item, follow-up)",
+    "fine-grained compute/I-O orchestration inside the attention kernel (SolidAttention leg 3 beyond the bounded per-block overlap model)",
+    "real device I/O: configured bandwidths and latencies, not measured — Hanzo-hardware rerun is the follow-up",
+    "engine integration into hanzo-engine decode loops, host paging, or CUDA/graphs",
+    "multi-tenant concurrent serving (single simulated session; CacheSalt keying provided, concurrency policy is engine work)"
+  ],
+  "upstream_figures_are_not_hanzo_expectations": {
+    "solidattention_paper": "authors report up to 3.1x inference speed improvement and ~98% memory-footprint reduction on their AIPC testbed (FAST '26)",
+    "stance": "not reproduced on Hanzo hardware; not treated as Hanzo expectations per the bounty's own caveat. Our fabric-policy figures (1.13x-1.46x decode wall on the deterministic trace) are the only numbers this PR claims."
+  },
+  "raw_command": "cargo run --release --example solid_attention_bench",
+  "replication": "git checkout the PR head; cargo run --release -p hanzo-kv-fabric --example solid_attention_bench"
+}

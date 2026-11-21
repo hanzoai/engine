@@ -17,6 +17,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
+pub mod ssd_offload;
+pub use ssd_offload::{
+    overlap_stall_ns, predict_next, salted_block_key, OffloadConfig, PoolStats, SsdOffloadPool,
+    BLOCK_BYTES,
+};
 const WIRE_MAGIC: [u8; 4] = *b"HKV1";
 const OP_PULL: u8 = 1;
 const OP_PUSH: u8 = 2;

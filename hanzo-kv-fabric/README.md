@@ -13,3 +13,4 @@ Epoch-fenced KV block ownership directory and framed TCP transport (`HKV1`) for 
 ```bash
 cargo run --release -p hanzo-kv-fabric --example kv_fabric_bench
 ```
+- **`SsdOffloadPool`** (`ssd_offload` module): sparse SSD KV offload policy per HIP-1345 §2.1 (SolidAttention, engine#92) — coarse 64 MiB blocks, tenant-salted block keys (§1.1 CacheSalt), LRU staging under a 512 MiB budget, temporal-locality speculative prefetch, and a per-block completion overlap model. Demand fetch is the matched baseline; a depth-1 oracle probe shows prefetch depth dominates hiding. Sparse attention algorithms and answer quality are out of scope (engine work).
