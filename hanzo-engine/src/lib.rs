@@ -62,6 +62,7 @@ pub use license::{
     EXPECTED_APP_ID as LICENSE_EXPECTED_APP_ID, HANZO_LICENSE_PUBKEY,
 };
 mod search;
+pub mod resonance;
 
 mod model_selected;
 pub use model_selected::ModelSelected;
