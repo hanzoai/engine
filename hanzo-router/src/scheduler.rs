@@ -322,17 +322,22 @@ impl ReplicaSet {
                 let allocation = (sessions.get(n.replica.id.as_str()).copied().unwrap_or(0) + 1)
                     as f64
                     / settings.weight as f64;
-                let (cost_bucket, primary_residency) = match &state.bidaw {
+                // Without Bidaw the order is the original one: measured residency leads,
+                // then room. With it, expected TTFT leads after room and the tiered
+                // residency breaks ties within a latency bucket.
+                let (lead, cost_bucket, residency) = match &state.bidaw {
                     Some(model) => (
+                        std::cmp::Reverse(0),
                         model.bucket(node_est(n, model, &state).total_ttft_ms),
                         std::cmp::Reverse(tiered_total),
                     ),
-                    None => (0u64, std::cmp::Reverse(measured)),
+                    None => (std::cmp::Reverse(measured), 0u64, std::cmp::Reverse(0)),
                 };
                 (
+                    lead,
                     room,
                     cost_bucket,
-                    primary_residency,
+                    residency,
                     !cache,
                     !role,
                     load,
@@ -846,6 +851,24 @@ mod tests {
             "http://spark",
             "an invalidated worker cannot still claim residency"
         );
+    }
+
+    /// With Bidaw off the rank is the original one: a replica that proved it holds the
+    /// prefix beats a roomier replica, even when no replica advertises enough context.
+    #[test]
+    fn default_rank_puts_measured_residency_before_context_room() {
+        let mut big = Replica::new("http://big");
+        big.max_context = 1_000_000;
+        let mut small = Replica::new("http://small");
+        small.max_context = 65_536;
+        let p = ReplicaSet::new([big, small], 8);
+        let now = Instant::now();
+        let mut h = hints("seen");
+        h.prefix = Some("org/model/prefix".into());
+        h.approx_tokens = 2_000_000;
+        p.observe_completion("http://small", &h, Some(40_000), now);
+        h.session = None;
+        assert_eq!(pick(&p, &h, now).id(), "http://small");
     }
 
     #[test]
