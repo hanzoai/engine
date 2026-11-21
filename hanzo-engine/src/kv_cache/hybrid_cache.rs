@@ -122,7 +122,9 @@ impl RecurrentStatePool {
         debug_assert!(slot_idx < self.capacity);
         self.trail = None;
         self.seqlen_offsets[slot_idx] = 0;
-        self.free_slots.push(slot_idx);
+        if !self.free_slots.contains(&slot_idx) {
+            self.free_slots.push(slot_idx);
+        }
     }
 
     /// Get the seqlen offset for a slot
@@ -1088,6 +1090,47 @@ mod tests {
         let (conv, recurrent) = slot_values(pool_at(&cache, 2), 0)?;
         assert!(conv.iter().all(|&v| v == 1.0));
         assert_eq!(recurrent, vec![0.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn reset_seq_and_double_free_preserve_concurrent_slots() -> Result<()> {
+        let mut cache = side_cache()?;
+        let s0 = cache.allocate_seq().expect("slot 0");
+        let s1 = cache.allocate_seq().expect("slot 1");
+        assert_ne!(s0, s1);
+
+        {
+            let pool = cache
+                .get_mut(0)
+                .and_then(HybridLayerCache::as_recurrent_pool_mut)
+                .unwrap();
+            let mut c_shape = pool.conv_state.dims().to_vec();
+            c_shape[0] = 1;
+            let mut r_shape = pool.recurrent_state.dims().to_vec();
+            r_shape[0] = 1;
+            let c0 = Tensor::full(7.0f32, c_shape, &Device::Cpu)?
+                .to_dtype(pool.conv_state.dtype())?;
+            let r0 = Tensor::full(9.0f32, r_shape, &Device::Cpu)?
+                .to_dtype(pool.recurrent_state.dtype())?;
+            pool.conv_state.slice_set(&c0, 0, s0)?;
+            pool.recurrent_state.slice_set(&r0, 0, s0)?;
+            pool.set_seqlen_offset(s0, 42);
+        }
+
+        cache.reset_seq(s1)?;
+        assert_eq!(pool_at(&cache, 0).get_seqlen_offset(s0), 42);
+        let (conv0, rec0) = slot_values(pool_at(&cache, 0), s0)?;
+        assert!(conv0.iter().all(|&v| v == 7.0));
+        assert!(rec0.iter().all(|&v| v == 9.0));
+
+        cache.free_seq(s1);
+        cache.free_seq(s1);
+        let s2 = cache.allocate_seq().expect("slot 2");
+        let s3 = cache.allocate_seq().expect("slot 3");
+        assert_ne!(s2, s0);
+        assert_ne!(s3, s0);
+        assert_ne!(s2, s3);
         Ok(())
     }
 }

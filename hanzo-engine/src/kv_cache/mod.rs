@@ -469,6 +469,84 @@ impl NormalCache {
     }
 }
 
+static HYBRID_KV_ZERO_COPY_STATE: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0); // 0 = unset, 1 = disabled, 2 = enabled
+
+/// Runtime rollback/ablation switch for single-sequence zero-copy KV transfers
+/// (`HANZO_HYBRID_KV_ZERO_COPY=0|false|off|legacy` forces the legacy copy+clamp path; defaults enabled).
+#[inline]
+pub fn hybrid_kv_zero_copy_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    match HYBRID_KV_ZERO_COPY_STATE.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let on = !matches!(
+                std::env::var("HANZO_HYBRID_KV_ZERO_COPY").ok().as_deref(),
+                Some("0") | Some("false") | Some("off") | Some("legacy")
+            );
+            HYBRID_KV_ZERO_COPY_STATE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// Checks whether a single-sequence [`KvCache`] satisfies all layout invariants for zero-copy
+/// handoff (`dim(0) == 1`, contiguous backing tensor, `capacity_seq_len` matching backing tensor
+/// extent, and `current_seq_len <= capacity_seq_len`).
+fn single_seq_zero_copy_eligible(kv: &KvCache) -> bool {
+    match kv {
+        KvCache::Normal { k, v } => {
+            let ok = |c: &SingleCache| {
+                c.all_data.as_ref().is_some_and(|t| {
+                    t.is_contiguous()
+                        && t.dims().first() == Some(&1)
+                        && t.dim(c.dim).ok() == Some(c.capacity_seq_len)
+                        && c.current_seq_len <= c.capacity_seq_len
+                })
+            };
+            ok(k) && ok(v) && k.current_seq_len == v.current_seq_len
+        }
+        KvCache::Rotating { k, v } => {
+            let ok = |c: &RotatingCache| {
+                c.all_data.as_ref().is_some_and(|t| {
+                    t.is_contiguous()
+                        && t.dims().first() == Some(&1)
+                        && t.dim(c.dim).ok() == Some(c.capacity_seq_len)
+                })
+            };
+            ok(k) && ok(v) && k.current_seq_len == v.current_seq_len
+        }
+        KvCache::Shared { .. } => true,
+    }
+}
+
+/// Clones a [`KvCache`] for zero-copy transfer while clearing any transient `last_append_result`
+/// tensor on [`RotatingCache`] so stale views are never retained across steps.
+fn clone_kv_for_transfer(kv: &KvCache) -> KvCache {
+    match kv {
+        KvCache::Rotating { k, v } => KvCache::Rotating {
+            k: RotatingCache {
+                all_data: k.all_data.clone(),
+                dim: k.dim,
+                current_seq_len: k.current_seq_len,
+                max_seq_len: k.max_seq_len,
+                capacity_seq_len: k.capacity_seq_len,
+                last_append_result: None,
+            },
+            v: RotatingCache {
+                all_data: v.all_data.clone(),
+                dim: v.dim,
+                current_seq_len: v.current_seq_len,
+                max_seq_len: v.max_seq_len,
+                capacity_seq_len: v.capacity_seq_len,
+                last_append_result: None,
+            },
+        },
+        other => other.clone(),
+    }
+}
+
 pub struct NormalCacheManager;
 
 impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCacheManager {
@@ -510,7 +588,11 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     }
                 }
             };
-            if batch_len == 1 && first_k.is_contiguous() && first_v.is_contiguous() {
+            if batch_len == 1
+                && hybrid_kv_zero_copy_enabled()
+                && first_k.is_contiguous()
+                && first_v.is_contiguous()
+            {
                 new_k_cache.push(Some(first_k));
                 new_v_cache.push(Some(first_v));
                 continue;
@@ -1247,6 +1329,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         }
 
+        let zero_copy = hybrid_kv_zero_copy_enabled();
+
         // Attention layers' and side K/V caches still need batching.
         for layer_idx in 0..hybrid_cache.caches.len() {
             let layer_cache = hybrid_cache.caches.get_mut(layer_idx).unwrap();
@@ -1255,31 +1339,34 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 // Single-sequence fast path: move/share the existing KV storage + capacity_seq_len
                 // directly (O(1) Arc clone). Avoids 3x full-KV `copy3d` copies per layer per token
                 // (clone_in contiguous + zero-headroom SingleCache::append realloc + clone_out contiguous).
-                if seqs.len() == 1 {
+                if seqs.len() == 1 && zero_copy {
                     let seq_cache = if modify_draft_cache {
                         seqs[0].normal_draft_cache()
                     } else {
                         seqs[0].normal_cache()
                     };
-                    if let Some(Some(ref seq_kv)) = seq_cache.get(layer_idx) {
-                        let contiguous_backing = match seq_kv {
-                            KvCache::Normal { k, v } => {
-                                k.all_data.as_ref().is_some_and(|t| t.is_contiguous())
-                                    && v.all_data.as_ref().is_some_and(|t| t.is_contiguous())
-                            }
-                            KvCache::Rotating { k, v } => {
-                                k.all_data.as_ref().is_some_and(|t| t.is_contiguous())
-                                    && v.all_data.as_ref().is_some_and(|t| t.is_contiguous())
-                            }
-                            KvCache::Shared { .. } => true,
-                        };
-                        if contiguous_backing {
-                            *kv_cache = seq_kv.clone();
+                    match seq_cache.get(layer_idx) {
+                        Some(Some(seq_kv)) if single_seq_zero_copy_eligible(seq_kv) => {
+                            *kv_cache = clone_kv_for_transfer(seq_kv);
                             continue;
                         }
-                    } else {
-                        kv_cache.reset();
-                        continue;
+                        Some(Some(KvCache::Normal { k, v }))
+                            if k.all_data.is_none() || v.all_data.is_none() =>
+                        {
+                            kv_cache.reset();
+                            continue;
+                        }
+                        Some(Some(KvCache::Rotating { k, v }))
+                            if k.all_data.is_none() || v.all_data.is_none() =>
+                        {
+                            kv_cache.reset();
+                            continue;
+                        }
+                        Some(None) | None => {
+                            kv_cache.reset();
+                            continue;
+                        }
+                        Some(Some(_)) => {}
                     }
                 }
 
@@ -1333,13 +1420,17 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                 k.all_data = Some(batched_k);
                                 k.current_seq_len = tk.current_seq_len;
                                 k.capacity_seq_len = tk.current_seq_len;
+                                k.last_append_result = None;
                                 v.all_data = Some(batched_v);
                                 v.current_seq_len = tk.current_seq_len;
                                 v.capacity_seq_len = tk.current_seq_len;
+                                v.last_append_result = None;
                             }
                             _ => {}
                         }
                     }
+                } else {
+                    kv_cache.reset();
                 }
             }
             // For recurrent layers: No copying needed!
@@ -1350,29 +1441,23 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         let hybrid_cache = pipeline.cache().hybrid();
         let num_seqs = seqs.len();
+        let zero_copy = hybrid_kv_zero_copy_enabled();
 
         // Split attention layers' and side K/V caches back to sequences.
         for layer_idx in 0..hybrid_cache.caches.len() {
             let layer_cache = hybrid_cache.caches.get(layer_idx).unwrap();
 
             if let HybridLayerCache::Attention(kv_cache) = layer_cache {
-                if num_seqs == 1 {
-                    let has_data = match kv_cache {
-                        KvCache::Normal { k, v } => k.all_data.is_some() && v.all_data.is_some(),
-                        KvCache::Rotating { k, v } => k.all_data.is_some() && v.all_data.is_some(),
-                        KvCache::Shared { .. } => true,
+                if num_seqs == 1 && zero_copy && single_seq_zero_copy_eligible(kv_cache) {
+                    let seq_cache = if modify_draft_cache {
+                        seqs[0].normal_draft_cache()
+                    } else {
+                        seqs[0].normal_cache()
                     };
-                    if has_data {
-                        let seq_cache = if modify_draft_cache {
-                            seqs[0].normal_draft_cache()
-                        } else {
-                            seqs[0].normal_cache()
-                        };
-                        while seq_cache.len() <= layer_idx {
-                            seq_cache.push(None);
-                        }
-                        seq_cache[layer_idx] = Some(kv_cache.clone());
+                    while seq_cache.len() <= layer_idx {
+                        seq_cache.push(None);
                     }
+                    seq_cache[layer_idx] = Some(clone_kv_for_transfer(kv_cache));
                     continue;
                 }
                 if let (Ok(Some(k)), Ok(Some(v))) = (kv_cache.k(), kv_cache.v()) {
@@ -1415,9 +1500,11 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                     k.all_data = Some(seq_k);
                                     k.current_seq_len = src_k.current_seq_len;
                                     k.capacity_seq_len = src_k.current_seq_len;
+                                    k.last_append_result = None;
                                     v.all_data = Some(seq_v);
                                     v.current_seq_len = src_k.current_seq_len;
                                     v.capacity_seq_len = src_k.current_seq_len;
+                                    v.last_append_result = None;
                                 }
                                 _ => {}
                             }
@@ -1448,12 +1535,36 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 kv.reset();
             }
         }
-        // Reset the hybrid cache (including recurrent state pools)
+        // Reset ONLY attention KV caches and the recurrent slots owned by `seqs`.
+        // Never call `hybrid_cache.reset()` here: `RecurrentStatePool::reset()` zeroes every
+        // slot in the pool and refills `free_slots = 0..capacity`, which clobbers live/waiting
+        // concurrent sequences' recurrent states and causes slot aliasing under `--max-seqs > 1`.
         let mut hybrid_cache = pipeline.cache().hybrid();
-        hybrid_cache.reset();
+        for layer in &mut hybrid_cache.caches {
+            if let HybridLayerCache::Attention(kv) = layer {
+                kv.reset();
+            }
+        }
+
+        // Ensure every sequence in this prompt batch has a dedicated recurrent slot, and zero
+        // ONLY those slots so other in-flight/waiting sequences are untouched.
+        for seq in seqs.iter_mut() {
+            if seq.recurrent_state_idx().is_none() {
+                if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                    seq.set_recurrent_state_idx(Some(slot_idx));
+                }
+            }
+            if let Some(slot_idx) = seq.recurrent_state_idx() {
+                if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
+                    tracing::warn!(
+                        "Failed to reset recurrent state slot {slot_idx} for seq {}: {e}",
+                        seq.id()
+                    );
+                }
+            }
+        }
 
         // Build state_indices so the forward pass can access recurrent pool states.
-        // Sequences already have slots allocated from add_request.
         let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
             if let HybridLayerCache::Recurrent(pool) = c {
                 Some(pool.device().clone())
@@ -2216,5 +2327,58 @@ mod payload_tests {
             max_payload_bytes: 1 << 30,
         };
         assert!(KvCache::from_payload(&bytes, &Device::Cpu, &strict).is_err());
+    }
+
+    #[test]
+    fn single_seq_zero_copy_invariants_and_rotating_view_clearing() -> hanzo_ml::Result<()> {
+        let mut normal = KvCache::new_normal(2, 1024, 64);
+        assert!(!super::single_seq_zero_copy_eligible(&normal));
+
+        let k1 = Tensor::full(1.0f32, (1, 2, 4, 8), &Device::Cpu)?;
+        let v1 = Tensor::full(2.0f32, (1, 2, 4, 8), &Device::Cpu)?;
+        normal.append(&k1, &v1)?;
+        assert!(super::single_seq_zero_copy_eligible(&normal));
+
+        let mut batched = KvCache::new_normal(2, 1024, 64);
+        let kb = Tensor::full(1.0f32, (2, 2, 4, 8), &Device::Cpu)?;
+        let vb = Tensor::full(2.0f32, (2, 2, 4, 8), &Device::Cpu)?;
+        batched.append(&kb, &vb)?;
+        assert!(!super::single_seq_zero_copy_eligible(&batched));
+
+        let mut transferred = super::clone_kv_for_transfer(&normal);
+        let cap_before = match &transferred {
+            KvCache::Normal { k, .. } => k.capacity_seq_len,
+            _ => unreachable!(),
+        };
+        assert_eq!(cap_before, 64);
+        let k2 = Tensor::full(3.0f32, (1, 2, 2, 8), &Device::Cpu)?;
+        let v2 = Tensor::full(4.0f32, (1, 2, 2, 8), &Device::Cpu)?;
+        transferred.append(&k2, &v2)?;
+        assert_eq!(transferred.current_seq_len(), 6);
+        transferred.set_len(4)?;
+        let k_rb = Tensor::full(9.0f32, (1, 2, 1, 8), &Device::Cpu)?;
+        let v_rb = Tensor::full(-9.0f32, (1, 2, 1, 8), &Device::Cpu)?;
+        transferred.append(&k_rb, &v_rb)?;
+        assert_eq!(transferred.current_seq_len(), 5);
+        let cap_after = match &transferred {
+            KvCache::Normal { k, .. } => k.capacity_seq_len,
+            _ => unreachable!(),
+        };
+        assert_eq!(cap_after, 64, "rollback + append must not reallocate");
+        let k_vals = transferred.k()?.unwrap().flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(k_vals[3 * 8], 1.0);
+        assert_eq!(k_vals[4 * 8], 9.0);
+
+        let mut rot = KvCache::new_rotating(2, 8, 8);
+        rot.append(&k1, &v1)?;
+        assert!(super::single_seq_zero_copy_eligible(&rot));
+        let rot_copy = super::clone_kv_for_transfer(&rot);
+        if let KvCache::Rotating { k, v } = rot_copy {
+            assert!(k.last_append_result.is_none());
+            assert!(v.last_append_result.is_none());
+        } else {
+            panic!("expected rotating cache");
+        }
+        Ok(())
     }
 }
