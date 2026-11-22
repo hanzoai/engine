@@ -937,16 +937,16 @@ pub(crate) mod tests {
         hanzo_ml::safetensors::save(&main, &a)?;
         let mut header = serde_json::Map::new();
         let mut at = 0usize;
-        let mut data = vec![];
+        let mut data: Vec<u8> = vec![];
         for (name, bytes, shape, dtype) in &table {
             header.insert(name.clone(), serde_json::json!({"dtype": dtype, "shape": shape, "data_offsets": [at, at + bytes.len()]}));
             at += bytes.len();
-            data.extend(bytes);
+            data.extend_from_slice(bytes);
         }
         let json = serde_json::to_vec(&header).map_err(hanzo_ml::Error::wrap)?;
         let mut file = (json.len() as u64).to_le_bytes().to_vec();
-        file.extend(&json);
-        file.extend(&data);
+        file.extend_from_slice(&json);
+        file.extend_from_slice(&data);
         let b = dir.join("model-00002-of-00002.safetensors");
         std::fs::write(&b, &file).map_err(hanzo_ml::Error::wrap)?;
         Ok(vec![a, b])

@@ -2442,8 +2442,17 @@ mod tests {
         let on3 = |v: Vec<f32>, shape: (usize, usize, usize)| -> Result<Tensor> {
             Tensor::from_vec(v, shape, &Device::Cpu)?.to_device(dev)
         };
-        let q = on(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?;
-        let k = on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?;
+        // Production GDN always L2-normalizes q and k before recurrence so ||k||_2 = 1 and
+        // (I - beta * k k^T) remains contraction-stable over 32 steps (unnormalized [-1,1]^128
+        // has ||k||^2 ~ 43, amplifying 1-ULP FMA order differences exponentially).
+        let q = l2_norm(
+            &on(gen(batch * seq * nvh * hkd, 1), (batch, seq, nvh, hkd))?,
+            1e-6,
+        )?;
+        let k = l2_norm(
+            &on(gen(batch * seq * nvh * hkd, 2), (batch, seq, nvh, hkd))?,
+            1e-6,
+        )?;
         let v = on(gen(batch * seq * nvh * hvd, 3), (batch, seq, nvh, hvd))?;
         let g = on3(
             gen(batch * seq * nvh, 4)
@@ -2473,8 +2482,11 @@ mod tests {
         let mut state_ref = sc.clone();
         let y_ref = recurrence_portable(&qc, &kc, &vc, &gc, &bc, &mut state_ref)?;
 
-        let a = y_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
-        let b = y_ref.to_vec1::<f32>()?;
+        let a = y_fused
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let b = y_ref.flatten_all()?.to_vec1::<f32>()?;
         let max_rel = a
             .iter()
             .zip(&b)
@@ -2485,8 +2497,11 @@ mod tests {
             "gdn_scan_rocm vs portable max_rel {max_rel}"
         );
 
-        let sf = state_fused.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
-        let sr = state_ref.to_vec1::<f32>()?;
+        let sf = state_fused
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let sr = state_ref.flatten_all()?.to_vec1::<f32>()?;
         let state_rel = sf
             .iter()
             .zip(&sr)

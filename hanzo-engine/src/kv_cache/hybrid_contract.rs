@@ -784,12 +784,274 @@ mod tests {
         Ok(())
     }
 
+    /// Concurrent multi-session stress test:
+    /// - Prefill shared prompt on `req 1` (len=4), fork into 3 concurrent sessions (`req 10`, `20`, `30`)
+    /// - Interleave distinct token streams across all 3 sessions (testing recurrent-slot isolation & COW)
+    /// - Run speculative draft + rejection rollback on `req 20` while `req 10` & `req 30` advance
+    /// - Cancel & evict `req 10`, immediately allocate `req 40` into the freed slot (assert zero state leak)
+    /// - Verify `req 20` (post-rollback) and `req 30` match independent ground-truth runs!
+    fn run_hybrid_concurrent_sessions_stress(
+        dev: &Device,
+        dtype: DType,
+        use_dsl: bool,
+    ) -> Result<()> {
+        let mode = if use_dsl { QkImpl::Dsl } else { QkImpl::Legacy };
+        dsl::set_gdn_impl(mode);
+        dsl::set_flash_impl(mode);
+
+        let (n_heads, n_kv, kd, vd, conv_dim, conv_k, block_size) =
+            (4usize, 2usize, 64usize, 64usize, 16usize, 4usize, 4usize);
+        let make_contract = || -> Result<HybridStateContract> {
+            let rec_cfg = RecurrentLayerConfig {
+                conv_dim,
+                conv_width: conv_k,
+                state_dims: vec![n_heads, kd, vd],
+                conv_dtype: dtype,
+                state_dtype: DType::F32,
+            };
+            let cfg = HybridCacheConfig::uniform(
+                vec![HybridLayerType::Recurrent, HybridLayerType::Attention],
+                64,
+                rec_cfg,
+            );
+            Ok(HybridStateContract::new(HybridCache::new(cfg, dev)?))
+        };
+
+        // Shared 4-token prefix + 3 distinct 3-token continuations (A=req10, B=req20, C=req30)
+        // plus a 2-token bogus speculative draft for req20.
+        let mk_stream = |seed_base: u64, len: usize| -> Result<[Tensor; 6]> {
+            Ok([
+                seeded(&[1, len, conv_dim], seed_base + 1, 0.5, dev)?.to_dtype(dtype)?,
+                seeded(&[1, len, n_heads, kd], seed_base + 2, 0.3, dev)?.to_dtype(dtype)?,
+                seeded(&[1, len, n_heads, kd], seed_base + 3, 0.3, dev)?.to_dtype(dtype)?,
+                seeded(&[1, len, n_heads, vd], seed_base + 4, 0.3, dev)?.to_dtype(dtype)?,
+                (seeded(&[1, len, n_heads], seed_base + 5, 0.25, dev)? - 0.35)?.to_dtype(dtype)?,
+                ((seeded(&[1, len, n_heads], seed_base + 6, 0.4, dev)? + 1.0)? * 0.5)?
+                    .to_dtype(dtype)?,
+            ])
+        };
+        let prefix = mk_stream(100, 4)?;
+        let cont_a = mk_stream(200, 3)?;
+        let cont_b = mk_stream(300, 3)?;
+        let cont_c = mk_stream(400, 3)?;
+        let bogus_b = mk_stream(900, 2)?;
+
+        let dummy_attn = |seed_base: u64, len: usize| -> Result<[Tensor; 3]> {
+            Ok([
+                seeded(&[1, n_heads, len, kd], seed_base + 7, 0.3, dev)?.to_dtype(dtype)?,
+                seeded(&[1, n_kv, len, kd], seed_base + 8, 0.3, dev)?.to_dtype(dtype)?,
+                seeded(&[1, n_kv, len, kd], seed_base + 9, 0.3, dev)?.to_dtype(dtype)?,
+            ])
+        };
+        let p_attn = dummy_attn(100, 4)?;
+        let a_attn = dummy_attn(200, 3)?;
+        let b_attn = dummy_attn(300, 3)?;
+        let c_attn = dummy_attn(400, 3)?;
+        let bog_attn = dummy_attn(900, 2)?;
+
+        // Ground truth for B (req 20) and C (req 30) in completely isolated contracts
+        let run_isolated = |cont: &[Tensor; 6], ca: &[Tensor; 3]| -> Result<Vec<Tensor>> {
+            let mut c = make_contract()?;
+            c.allocate_request(1)?;
+            let _ = hybrid_forward_step(
+                &mut c, 1, &prefix[0], &prefix[1], &prefix[2], &prefix[3], &prefix[4], &prefix[5],
+                &p_attn[0], &p_attn[1], &p_attn[2], false, block_size,
+            )?;
+            let mut outs = Vec::new();
+            for t in 0..3 {
+                let (yg, _) = hybrid_forward_step(
+                    &mut c,
+                    1,
+                    &cont[0].narrow(1, t, 1)?.contiguous()?,
+                    &cont[1].narrow(1, t, 1)?.contiguous()?,
+                    &cont[2].narrow(1, t, 1)?.contiguous()?,
+                    &cont[3].narrow(1, t, 1)?.contiguous()?,
+                    &cont[4].narrow(1, t, 1)?.contiguous()?,
+                    &cont[5].narrow(1, t, 1)?.contiguous()?,
+                    &ca[0].narrow(2, t, 1)?.contiguous()?,
+                    &ca[1].narrow(2, t, 1)?.contiguous()?,
+                    &ca[2].narrow(2, t, 1)?.contiguous()?,
+                    false,
+                    block_size,
+                )?;
+                outs.push(yg);
+            }
+            Ok(outs)
+        };
+        let gt_b = run_isolated(&cont_b, &b_attn)?;
+        let gt_c = run_isolated(&cont_c, &c_attn)?;
+
+        // Shared concurrent contract: prefill req 1, fork into req 10, 20, 30
+        let mut mgr = make_contract()?;
+        mgr.allocate_request(1)?;
+        let _ = hybrid_forward_step(
+            &mut mgr, 1, &prefix[0], &prefix[1], &prefix[2], &prefix[3], &prefix[4], &prefix[5],
+            &p_attn[0], &p_attn[1], &p_attn[2], false, block_size,
+        )?;
+        let ckpt_prefix = mgr.fork_prefix(1, 10)?;
+        let _ = mgr.fork_prefix(1, 20)?;
+        let _ = mgr.fork_prefix(1, 30)?;
+        // Cancel original seed request 1 (simulating prefix eviction of originator)
+        mgr.cancel_request(1)?;
+        assert!(mgr.binding(1).is_none());
+
+        let step_rec_only = |c: &mut HybridStateContract,
+                             req: usize,
+                             st: &[Tensor; 6],
+                             at: &[Tensor; 3],
+                             t: usize,
+                             record_trail: bool|
+         -> Result<Tensor> {
+            let (yg, _) = hybrid_forward_step(
+                c,
+                req,
+                &st[0].narrow(1, t, 1)?.contiguous()?,
+                &st[1].narrow(1, t, 1)?.contiguous()?,
+                &st[2].narrow(1, t, 1)?.contiguous()?,
+                &st[3].narrow(1, t, 1)?.contiguous()?,
+                &st[4].narrow(1, t, 1)?.contiguous()?,
+                &st[5].narrow(1, t, 1)?.contiguous()?,
+                &at[0].narrow(2, t, 1)?.contiguous()?,
+                &at[1].narrow(2, t, 1)?.contiguous()?,
+                &at[2].narrow(2, t, 1)?.contiguous()?,
+                record_trail,
+                block_size,
+            )?;
+            Ok(yg)
+        };
+
+        // Interleave token 0 across req 10, 20, 30
+        let _ = step_rec_only(&mut mgr, 10, &cont_a, &a_attn, 0, false)?;
+        let yb0 = step_rec_only(&mut mgr, 20, &cont_b, &b_attn, 0, false)?;
+        let yc0 = step_rec_only(&mut mgr, 30, &cont_c, &c_attn, 0, false)?;
+
+        // Advance req 10 and req 30 token 1
+        let _ = step_rec_only(&mut mgr, 10, &cont_a, &a_attn, 1, false)?;
+        let yc1 = step_rec_only(&mut mgr, 30, &cont_c, &c_attn, 1, false)?;
+
+        // Speculative verify forward on req 20: [true token 1 (accepted) + 2 bogus drafts (rejected)]
+        // in one multi-token verify pass with record_trail=true, then immediately rollback 2 drafts.
+        let ver_conv = Tensor::cat(&[&cont_b[0].narrow(1, 1, 1)?, &bogus_b[0]], 1)?.contiguous()?;
+        let ver_q = Tensor::cat(&[&cont_b[1].narrow(1, 1, 1)?, &bogus_b[1]], 1)?.contiguous()?;
+        let ver_k = Tensor::cat(&[&cont_b[2].narrow(1, 1, 1)?, &bogus_b[2]], 1)?.contiguous()?;
+        let ver_v = Tensor::cat(&[&cont_b[3].narrow(1, 1, 1)?, &bogus_b[3]], 1)?.contiguous()?;
+        let ver_g = Tensor::cat(&[&cont_b[4].narrow(1, 1, 1)?, &bogus_b[4]], 1)?.contiguous()?;
+        let ver_b = Tensor::cat(&[&cont_b[5].narrow(1, 1, 1)?, &bogus_b[5]], 1)?.contiguous()?;
+        let ver_aq = Tensor::cat(&[&b_attn[0].narrow(2, 1, 1)?, &bog_attn[0]], 2)?.contiguous()?;
+        let ver_ak = Tensor::cat(&[&b_attn[1].narrow(2, 1, 1)?, &bog_attn[1]], 2)?.contiguous()?;
+        let ver_av = Tensor::cat(&[&b_attn[2].narrow(2, 1, 1)?, &bog_attn[2]], 2)?.contiguous()?;
+        let (yb_ver, _) = hybrid_forward_step(
+            &mut mgr, 20, &ver_conv, &ver_q, &ver_k, &ver_v, &ver_g, &ver_b, &ver_aq, &ver_ak,
+            &ver_av, true, block_size,
+        )?;
+        let yb1 = yb_ver.narrow(1, 0, 1)?.contiguous()?;
+        assert_eq!(mgr.binding(20).unwrap().context_len, 8);
+
+        // Reject both speculative draft tokens on req 20 (keep accepted token 1 -> len=6)
+        mgr.rollback_speculative(20, 6, 2, Some(block_size))?;
+        assert_eq!(mgr.binding(20).unwrap().context_len, 6);
+
+        // Cancel & evict req 10 mid-stream, immediately reuse freed slot for req 40
+        mgr.cancel_request(10)?;
+        assert!(mgr.binding(10).is_none());
+        let _slot40 = mgr.allocate_request(40)?;
+        let (c40, r40, o40) = mgr.inspect_recurrent_layer(40, 0)?;
+        assert_eq!(o40, 0, "reused slot must have zero offset");
+        assert!(
+            c40.to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .all(|&x| x == 0.0),
+            "reused slot must have zeroed conv_state"
+        );
+        assert!(
+            r40.flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .all(|&x| x == 0.0),
+            "reused slot must have zeroed recurrent_state"
+        );
+
+        // Advance req 20 token 2 (post-rollback) and req 30 token 2
+        let yb2 = step_rec_only(&mut mgr, 20, &cont_b, &b_attn, 2, false)?;
+        let yc2 = step_rec_only(&mut mgr, 30, &cont_c, &c_attn, 2, false)?;
+
+        // Verify original prefix checkpoint remained untouched (COW integrity)
+        assert_eq!(ckpt_prefix.token_len, 4);
+
+        let tol = if dtype == DType::F32 { 1e-4 } else { 5e-3 };
+        for (idx, (got, want)) in [(&yb0, &gt_b[0]), (&yb1, &gt_b[1]), (&yb2, &gt_b[2])]
+            .into_iter()
+            .enumerate()
+        {
+            let e = rel_err(got, want)?;
+            assert!(
+                e <= tol,
+                "concurrent req20 (post-rollback) step {idx} diverged: {e:.2e} > {tol:.1e}"
+            );
+        }
+        for (idx, (got, want)) in [(&yc0, &gt_c[0]), (&yc1, &gt_c[1]), (&yc2, &gt_c[2])]
+            .into_iter()
+            .enumerate()
+        {
+            let e = rel_err(got, want)?;
+            assert!(
+                e <= tol,
+                "concurrent req30 step {idx} diverged: {e:.2e} > {tol:.1e}"
+            );
+        }
+
+        mgr.cancel_request(20)?;
+        mgr.cancel_request(30)?;
+        mgr.cancel_request(40)?;
+        dsl::set_gdn_impl(QkImpl::Legacy);
+        dsl::set_flash_impl(QkImpl::Legacy);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_concurrent_sessions_stress_cpu() -> Result<()> {
+        run_hybrid_concurrent_sessions_stress(&Device::Cpu, DType::F32, false)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn hybrid_concurrent_sessions_stress_cuda_dsl() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::F32, true)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::BF16, true)?;
+        Ok(())
+    }
+
     #[cfg(feature = "metal")]
     #[test]
     fn hybrid_contract_metal_dsl_lifecycle() -> Result<()> {
         let dev = Device::new_metal(0)?;
         run_hybrid_contract_lifecycle(&dev, DType::F32, true)?;
         run_hybrid_contract_lifecycle(&dev, DType::BF16, true)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::F32, true)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::BF16, true)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "rocm")]
+    #[test]
+    fn hybrid_contract_rocm_dsl_lifecycle() -> Result<()> {
+        let dev = Device::new_rocm(0)?;
+        run_hybrid_contract_lifecycle(&dev, DType::F32, true)?;
+        run_hybrid_contract_lifecycle(&dev, DType::BF16, true)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::F32, true)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::BF16, true)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn hybrid_contract_vulkan_dsl_lifecycle() -> Result<()> {
+        let dev = Device::new_vulkan(0)?;
+        run_hybrid_contract_lifecycle(&dev, DType::F32, true)?;
+        run_hybrid_concurrent_sessions_stress(&dev, DType::F32, true)?;
         Ok(())
     }
 }
