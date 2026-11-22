@@ -3160,6 +3160,7 @@ dependencies = [
  "cli-table",
  "hanzo-engine",
  "hanzo-ml",
+ "hanzo-research",
  "hanzo-server-core",
  "libc",
  "reqwest 0.13.4",
@@ -3672,6 +3673,22 @@ dependencies = [
  "tokio",
  "tracing",
  "yoke",
+]
+
+[[package]]
+name = "hanzo-research"
+version = "0.2.5"
+source = "git+https://github.com/hanzoai/ml?branch=feat%2Funified-research-protocol#f37bda686fa78124e4586e6ad2835f4d7d96851c"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "libc",
+ "ryu",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "ureq",
 ]
 
 [[package]]

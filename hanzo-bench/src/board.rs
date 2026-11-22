@@ -856,12 +856,23 @@ fn filed(run: &Run) -> Result<Vec<Experiment>> {
         .collect())
 }
 
-/// File evidence at `POST /v1/research/experiments`, bearer `$HANZO_API_KEY`, 200 to a batch.
+/// File evidence locally via `hanzo_research::ResearchWal` first, then publish at `/v1/research`
+/// when `HANZO_API_KEY` or `hanzo auth token` is configured (`hanzo_research::token`).
+pub fn post_wal_and_sync(ledger_dir: &Path, run_id: &str, evidence: &[Experiment]) -> Result<()> {
+    let mut wal = hanzo_research::ResearchWal::open(ledger_dir, run_id)?;
+    for ev in evidence {
+        wal.append("board_experiment", ev)?;
+    }
+    if hanzo_research::token().is_ok() {
+        let base = std::env::var("RESEARCH_BASE").unwrap_or_else(|_| "https://api.hanzo.ai".into());
+        post(&format!("{}/v1/research/experiments", base.trim_end_matches('/')), evidence)?;
+    }
+    Ok(())
+}
+
+/// File evidence at `POST /v1/research/experiments`, bearer credential, 200 to a batch.
 pub fn post(url: &str, evidence: &[Experiment]) -> Result<()> {
-    let key = std::env::var("HANZO_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty());
-    let key = key.context("publishing needs $HANZO_API_KEY")?;
+    let key = hanzo_research::token().context("publishing needs $HANZO_API_KEY or `hanzo auth login`")?;
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;

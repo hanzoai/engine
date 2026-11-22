@@ -51,3 +51,19 @@ Options:
   -V, --version
           Print version
 ```
+
+## Unified Hanzo Research WAL & Ledger Integration
+
+`hanzo-bench` (`board.rs` and `bin/qmm.rs`) records structured `ExperimentRecordV2` entries
+via `hanzo-research` (`LocalResearchLedger`, WAL-first under `HANZO_RESEARCH_LEDGER` /
+`~/.cache/hanzo/research/shared`) alongside the JSON/markdown benchmark board:
+
+```bash
+cargo run --release --features cuda -p hanzo-bench --bin qmm -- \
+  --m 128 --reps 12 --quant q4k --baseline-quant q8_0 \
+  --research-dir "${HANZO_RESEARCH_LEDGER:-$HOME/.cache/hanzo/research/shared}"
+```
+
+Pass `--sync-cloud` (with `HANZO_API_KEY` set) to also upload and SHA-256 read-back verify
+records against `https://api.hanzo.ai`; offline runs persist `pending_sync` receipts that
+can later be replayed with `hanzo-research sync-wal`.
