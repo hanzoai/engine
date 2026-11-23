@@ -865,14 +865,18 @@ pub fn post_wal_and_sync(ledger_dir: &Path, run_id: &str, evidence: &[Experiment
     }
     if hanzo_research::token().is_ok() {
         let base = std::env::var("RESEARCH_BASE").unwrap_or_else(|_| "https://api.hanzo.ai".into());
-        post(&format!("{}/v1/research/experiments", base.trim_end_matches('/')), evidence)?;
+        post(
+            &format!("{}/v1/research/experiments", base.trim_end_matches('/')),
+            evidence,
+        )?;
     }
     Ok(())
 }
 
 /// File evidence at `POST /v1/research/experiments`, bearer credential, 200 to a batch.
 pub fn post(url: &str, evidence: &[Experiment]) -> Result<()> {
-    let key = hanzo_research::token().context("publishing needs $HANZO_API_KEY or `hanzo auth login`")?;
+    let key =
+        hanzo_research::token().context("publishing needs $HANZO_API_KEY or `hanzo auth login`")?;
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;

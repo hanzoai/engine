@@ -1,0 +1,55 @@
+{
+  "replay_gdn": {
+    "paths": [
+      "hanzo-engine/src/models/replay_gdn.rs",
+      "hanzo-engine/src/models/gdn.rs"
+    ],
+    "artifacts": []
+  },
+  "phase_policy": {
+    "paths": [
+      "hanzo-engine/src/kv_cache/phase_policy.rs"
+    ],
+    "artifacts": []
+  },
+  "hybrid_prefix": {
+    "paths": [
+      "hanzo-engine/src/kv_cache/hybrid_contract.rs",
+      "hanzo-engine/src/kv_cache/hybrid_cache.rs"
+    ],
+    "artifacts": []
+  },
+  "dflash2": {
+    "paths": [
+      "hanzo-engine/src/models/qwen3_dflash.rs",
+      "hanzo-engine/src/speculative/**"
+    ],
+    "artifacts": []
+  },
+  "afq_quant": {
+    "paths": [
+      "hanzo-quant/src/afq/**"
+    ],
+    "artifacts": []
+  },
+  "gguf_qmm": {
+    "paths": [
+      "hanzo-quant/src/gguf/**",
+      "hanzo-bench/src/bin/qmm.rs"
+    ],
+    "artifacts": []
+  },
+  "paged_attn": {
+    "paths": [
+      "hanzo-paged-attn/**"
+    ],
+    "artifacts": []
+  },
+  "vulkan_dsl": {
+    "paths": [
+      "hanzo-paged-attn/src/vulkan/**",
+      "hanzo-engine/src/attention/**"
+    ],
+    "artifacts": []
+  }
+}
