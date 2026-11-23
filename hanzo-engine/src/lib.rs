@@ -63,7 +63,7 @@ pub use kv_cache::{
     verify_hybrid_prefix_provenance_isolation, CacheProvenance, HybridEvalConfig,
     HybridMultiturnEvalReport, HybridPrefixCheckpoint, HybridPrefixRadixCache, HybridPrefixStats,
     HybridReplayStep, HybridRequestBinding, HybridStateCheckpoint, HybridStateContract,
-    KvPhaseEvalReport, KvPhasePointMetrics, KvPhasePolicy, ProvenanceIsolationReport,
+    KvPhaseEvalReport, KvPhasePointMetrics, KvPhasePolicy, ProvenanceIsolationReport, SummaryStats,
     TurnReuseMetrics, DEFAULT_MIN_FP8_DECODE_CTX, ENV_ENGINE_HYBRID_PREFIX_CACHE,
     ENV_ENGINE_KV_PHASE_POLICY,
 };

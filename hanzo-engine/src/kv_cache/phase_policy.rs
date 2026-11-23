@@ -402,6 +402,79 @@ impl HybridPrefixRadixCache {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SummaryStats {
+    pub n: usize,
+    pub median: f64,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub ci95_low: f64,
+    pub ci95_high: f64,
+}
+
+impl SummaryStats {
+    pub fn from_samples(samples: &[f64]) -> Self {
+        let n = samples.len();
+        if n == 0 {
+            return Self::default();
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = if n % 2 == 1 {
+            sorted[n / 2]
+        } else {
+            0.5 * (sorted[n / 2 - 1] + sorted[n / 2])
+        };
+        let mean = sorted.iter().sum::<f64>() / (n as f64);
+        if n == 1 {
+            return Self {
+                n,
+                median,
+                mean,
+                std_dev: 0.0,
+                ci95_low: mean,
+                ci95_high: mean,
+            };
+        }
+        let var = sorted
+            .iter()
+            .map(|&x| {
+                let d = x - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / ((n - 1) as f64);
+        let std_dev = var.sqrt();
+        let se = std_dev / (n as f64).sqrt();
+        let half_width = student_t_crit_975(n - 1) * se;
+        Self {
+            n,
+            median,
+            mean,
+            std_dev,
+            ci95_low: mean - half_width,
+            ci95_high: mean + half_width,
+        }
+    }
+}
+
+fn student_t_crit_975(df: usize) -> f64 {
+    const T_975: [f64; 30] = [
+        12.706_205, 4.302_653, 3.182_446, 2.776_445, 2.570_582, 2.446_912, 2.364_624, 2.306_004,
+        2.262_157, 2.228_139, 2.200_985, 2.178_813, 2.160_369, 2.144_787, 2.131_450, 2.119_905,
+        2.109_816, 2.100_922, 2.093_024, 2.085_963, 2.079_614, 2.073_873, 2.068_658, 2.063_899,
+        2.059_539, 2.055_529, 2.051_831, 2.048_407, 2.045_230, 2.042_272,
+    ];
+    if df == 0 {
+        0.0
+    } else if df <= T_975.len() {
+        T_975[df - 1]
+    } else {
+        let d = df as f64;
+        1.959_964 + 2.372_28 / d + 2.822_5 / (d * d)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HybridEvalConfig {
     pub num_gdn_layers: usize,
@@ -416,6 +489,7 @@ pub struct HybridEvalConfig {
     pub user_turn_tokens: usize,
     pub assistant_turn_tokens: usize,
     pub num_turns: usize,
+    pub repetitions: usize,
 }
 
 impl Default for HybridEvalConfig {
@@ -433,6 +507,7 @@ impl Default for HybridEvalConfig {
             user_turn_tokens: 256,
             assistant_turn_tokens: 128,
             num_turns: 5,
+            repetitions: 10,
         }
     }
 }
@@ -447,6 +522,11 @@ pub struct TurnReuseMetrics {
     pub cold_reprefill_ms: f64,
     pub warm_prefix_reuse_ms: f64,
     pub ttft_speedup: f64,
+    pub cold_ms_samples: Vec<f64>,
+    pub warm_ms_samples: Vec<f64>,
+    pub cold_ms_stats: SummaryStats,
+    pub warm_ms_stats: SummaryStats,
+    pub ttft_speedup_stats: SummaryStats,
     pub saved_prefill_flops: f64,
     pub saved_kv_write_bytes: usize,
     pub checkpoint_bytes: usize,
@@ -461,12 +541,21 @@ pub struct TurnReuseMetrics {
 pub struct HybridMultiturnEvalReport {
     pub backend: String,
     pub dtype: String,
+    pub is_synthetic_microbench: bool,
+    pub warmup_runs: usize,
+    pub repetitions: usize,
     pub config: HybridEvalConfig,
     pub shared_base_turns: Vec<TurnReuseMetrics>,
     pub cumulative_coding_turns: Vec<TurnReuseMetrics>,
     pub cumulative_cold_ms: f64,
     pub cumulative_warm_ms: f64,
     pub cumulative_ttft_speedup: f64,
+    pub cumulative_cold_ms_samples: Vec<f64>,
+    pub cumulative_warm_ms_samples: Vec<f64>,
+    pub cumulative_speedup_samples: Vec<f64>,
+    pub cumulative_cold_ms_stats: SummaryStats,
+    pub cumulative_warm_ms_stats: SummaryStats,
+    pub cumulative_ttft_speedup_stats: SummaryStats,
     pub total_saved_prefill_flops: f64,
     pub total_saved_kv_write_bytes: usize,
     pub cache_stats: HybridPrefixStats,
@@ -491,6 +580,10 @@ pub struct KvPhasePointMetrics {
     pub head_dim: usize,
     pub context_len: usize,
     pub prefill_seq_len: usize,
+    pub phase_aware_used_fp8: bool,
+    /// True only when decode_speedup comes from a native FP8 paged attention kernel (CUDA);
+    /// false on portable CPU where both BF16 and FP8 KV upcast to F32 before matmul.
+    pub decode_speedup_is_native: bool,
     pub bf16_prefill_us: f64,
     pub fp8_always_prefill_us: f64,
     pub phase_aware_prefill_us: f64,
@@ -503,6 +596,14 @@ pub struct KvPhasePointMetrics {
     pub fp8_decode_gb_s: f64,
     pub bf16_kv_36l_mib: f64,
     pub fp8_kv_36l_mib: f64,
+    /// Analytic tensor payload byte ratio (2.0x for BF16 vs F8E4M3).
+    pub analytic_kv_bytes_ratio: f64,
+    /// Resident 36-layer BF16 KV allocation bytes including page/NormalCache growth rounding.
+    pub measured_bf16_kv_alloc_bytes: usize,
+    /// Resident 36-layer FP8 KV + per-layer/per-head f32 scale metadata bytes including rounding.
+    pub measured_fp8_kv_plus_scale_bytes: usize,
+    /// Resident allocation ratio (measured_bf16_kv_alloc_bytes / measured_fp8_kv_plus_scale_bytes).
+    pub measured_kv_alloc_bytes_ratio: f64,
     pub bf16_decode_max_rel_vs_f32: f32,
     pub fp8_decode_max_rel_vs_f32: f32,
     pub fp8_decode_rmse_vs_bf16: f32,
@@ -845,13 +946,26 @@ fn sync_device(dev: &Device) -> Result<()> {
     dev.synchronize()
 }
 
+struct PreparedTurnStreams {
+    shared_prompt: Vec<u32>,
+    shared_full: HybridTokenStream,
+    cum_prompt_toks: Vec<u32>,
+    cum_prompt_stream: HybridTokenStream,
+    cum_after_asst_toks: Vec<u32>,
+    cum_asst_stream: Option<HybridTokenStream>,
+}
+
 /// Evaluate multi-turn hybrid KV + GDN + Conv1D prefix checkpoint reuse across shared and cumulative turns.
+/// Runs 1 full untimed multi-turn warmup sequence followed by `cfg.repetitions` timed repetitions,
+/// reporting per-repetition samples, median, mean, sample SD, and 95% Student-t CIs.
 pub fn evaluate_multiturn_hybrid_prefix_reuse(
     dev: &Device,
     dtype: DType,
     cfg: &HybridEvalConfig,
 ) -> Result<HybridMultiturnEvalReport> {
     set_hybrid_prefix_cache_override(Some(true));
+    let reps = cfg.repetitions.max(1);
+    let warmup_runs = 1usize;
     let shared_len = cfg.system_tokens + cfg.repo_tokens + cfg.tool_schema_tokens;
     let max_cum_len =
         shared_len + cfg.num_turns * (cfg.user_turn_tokens + cfg.assistant_turn_tokens) + 64;
@@ -860,160 +974,41 @@ pub fn evaluate_multiturn_hybrid_prefix_reuse(
         "zen4-hybrid-32b",
         Some("lora-agent-coder-v1"),
     );
-    let mut radix_cache = HybridPrefixRadixCache::new(64, 4 << 30);
 
     let shared_toks = make_token_ids(1, shared_len);
     let shared_stream = HybridTokenStream::generate(cfg, shared_len, 10_000, dtype, dev)?;
 
-    // Warmup GPU kernels once before timed turns.
-    {
-        let mut warm = build_hybrid_contract(cfg, shared_len + 64, dtype, dev)?;
-        warm.allocate_request(1)?;
-        let warm_slice = shared_stream.slice(0, 32.min(shared_len))?;
-        let _ = forward_hybrid_chunk(&mut warm, 1, &warm_slice)?;
-        sync_device(dev)?;
-    }
+    let mut prepared = Vec::with_capacity(cfg.num_turns);
+    let mut history_toks = shared_toks.clone();
+    let mut history_stream = HybridTokenStream::generate(cfg, shared_len, 10_000, dtype, dev)?;
 
-    // Workload A: 5 agent sub-tasks sharing [system + repo + tools] prefix.
-    let mut shared_base_turns = Vec::with_capacity(cfg.num_turns);
     for turn in 1..=cfg.num_turns {
-        let user_toks = make_token_ids(100 + turn as u32, cfg.user_turn_tokens);
-        let mut prompt_toks = shared_toks.clone();
-        prompt_toks.extend_from_slice(&user_toks);
-        let total_len = prompt_toks.len();
-
-        let user_stream = HybridTokenStream::generate(
+        let user_a_toks = make_token_ids(100 + turn as u32, cfg.user_turn_tokens);
+        let mut shared_prompt = shared_toks.clone();
+        shared_prompt.extend_from_slice(&user_a_toks);
+        let user_a_stream = HybridTokenStream::generate(
             cfg,
             cfg.user_turn_tokens,
             20_000 + turn as u64 * 100,
             dtype,
             dev,
         )?;
-        let full_stream = concat_hybrid_streams(&shared_stream, &user_stream)?;
+        let shared_full = concat_hybrid_streams(&shared_stream, &user_a_stream)?;
 
-        // Cold reference: full re-prefill from token 0.
-        let mut cold_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
-        cold_contract.allocate_request(1)?;
-        sync_device(dev)?;
-        let t_cold = Instant::now();
-        let (cold_gdn, cold_attn) = forward_hybrid_chunk(&mut cold_contract, 1, &full_stream)?;
-        sync_device(dev)?;
-        let cold_ms = t_cold.elapsed().as_secs_f64() * 1e3;
-
-        // Warm path: lookup in HybridPrefixRadixCache; on turn 1 miss, prefill shared boundary and store checkpoint.
-        let mut warm_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
-        warm_contract.allocate_request(1)?;
-        sync_device(dev)?;
-        let t_warm = Instant::now();
-        let (reused_len, warm_gdn, warm_attn, ckpt_bytes) = if let Some((ckpt, suffix_toks)) =
-            radix_cache.match_longest_prefix(&provenance, &prompt_toks)
-        {
-            let offset = warm_contract.import_prefix_checkpoint(1, &ckpt)?;
-            debug_assert_eq!(offset + suffix_toks.len(), total_len);
-            let suffix_stream = full_stream.slice(offset, suffix_toks.len())?;
-            let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &suffix_stream)?;
-            (offset, yg, ya, ckpt.total_bytes())
-        } else {
-            let _ = forward_hybrid_chunk(&mut warm_contract, 1, &shared_stream)?;
-            let shared_ckpt =
-                warm_contract.export_prefix_checkpoint(1, provenance.clone(), &shared_toks)?;
-            let cbytes = shared_ckpt.total_bytes();
-            assert!(radix_cache.insert(shared_ckpt));
-            let suffix_stream = full_stream.slice(shared_len, cfg.user_turn_tokens)?;
-            let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &suffix_stream)?;
-            (0usize, yg, ya, cbytes)
-        };
-        sync_device(dev)?;
-        let warm_ms = t_warm.elapsed().as_secs_f64() * 1e3;
-
-        let metrics = compare_hybrid_turn(
-            turn,
-            "shared_agent_base",
-            cfg,
-            dtype,
-            total_len,
-            reused_len,
-            cold_ms,
-            warm_ms,
-            ckpt_bytes,
-            &cold_contract,
-            &warm_contract,
-            &cold_gdn,
-            &warm_gdn,
-            &cold_attn,
-            &warm_attn,
-        )?;
-        shared_base_turns.push(metrics);
-    }
-
-    // Workload B: 5-turn cumulative coding conversation reusing prior-turn hybrid checkpoints.
-    let mut cumulative_coding_turns = Vec::with_capacity(cfg.num_turns);
-    let mut history_toks = shared_toks.clone();
-    let mut history_stream = shared_stream;
-
-    for turn in 1..=cfg.num_turns {
-        let user_toks = make_token_ids(500 + turn as u32, cfg.user_turn_tokens);
-        let user_stream = HybridTokenStream::generate(
+        let user_b_toks = make_token_ids(500 + turn as u32, cfg.user_turn_tokens);
+        let user_b_stream = HybridTokenStream::generate(
             cfg,
             cfg.user_turn_tokens,
             50_000 + turn as u64 * 100,
             dtype,
             dev,
         )?;
-        history_toks.extend_from_slice(&user_toks);
-        history_stream = concat_hybrid_streams(&history_stream, &user_stream)?;
-        let prompt_len = history_toks.len();
+        history_toks.extend_from_slice(&user_b_toks);
+        history_stream = concat_hybrid_streams(&history_stream, &user_b_stream)?;
+        let cum_prompt_toks = history_toks.clone();
+        let cum_prompt_stream = history_stream.slice(0, cum_prompt_toks.len())?;
 
-        // Cold reference: full re-prefill of entire conversation history [0..prompt_len].
-        let mut cold_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
-        cold_contract.allocate_request(1)?;
-        sync_device(dev)?;
-        let t_cold = Instant::now();
-        let (cold_gdn, cold_attn) = forward_hybrid_chunk(&mut cold_contract, 1, &history_stream)?;
-        sync_device(dev)?;
-        let cold_ms = t_cold.elapsed().as_secs_f64() * 1e3;
-
-        // Warm path: match longest hybrid checkpoint (3072 on turn 1 since shared base is already warm,
-        // then full prior-turn completion checkpoint on turns 2..=5).
-        let mut warm_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
-        warm_contract.allocate_request(1)?;
-        sync_device(dev)?;
-        let t_warm = Instant::now();
-        let (reused_len, warm_gdn, warm_attn, ckpt_bytes) = if let Some((ckpt, suffix_toks)) =
-            radix_cache.match_longest_prefix(&provenance, &history_toks)
-        {
-            let offset = warm_contract.import_prefix_checkpoint(1, &ckpt)?;
-            let suffix_stream = history_stream.slice(offset, suffix_toks.len())?;
-            let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &suffix_stream)?;
-            (offset, yg, ya, ckpt.total_bytes())
-        } else {
-            let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &history_stream)?;
-            (0usize, yg, ya, 0usize)
-        };
-        sync_device(dev)?;
-        let warm_ms = t_warm.elapsed().as_secs_f64() * 1e3;
-
-        let metrics = compare_hybrid_turn(
-            turn,
-            "cumulative_coding_chat",
-            cfg,
-            dtype,
-            prompt_len,
-            reused_len,
-            cold_ms,
-            warm_ms,
-            ckpt_bytes,
-            &cold_contract,
-            &warm_contract,
-            &cold_gdn,
-            &warm_gdn,
-            &cold_attn,
-            &warm_attn,
-        )?;
-        cumulative_coding_turns.push(metrics);
-
-        // Advance conversation with assistant reply and checkpoint the completed turn into radix cache.
-        if cfg.assistant_turn_tokens > 0 {
+        let cum_asst_stream = if cfg.assistant_turn_tokens > 0 {
             let asst_toks = make_token_ids(900 + turn as u32, cfg.assistant_turn_tokens);
             let asst_stream = HybridTokenStream::generate(
                 cfg,
@@ -1024,21 +1019,225 @@ pub fn evaluate_multiturn_hybrid_prefix_reuse(
             )?;
             history_toks.extend_from_slice(&asst_toks);
             history_stream = concat_hybrid_streams(&history_stream, &asst_stream)?;
-            let _ = forward_hybrid_chunk(&mut warm_contract, 1, &asst_stream)?;
-            let turn_ckpt =
-                warm_contract.export_prefix_checkpoint(1, provenance.clone(), &history_toks)?;
-            assert!(radix_cache.insert(turn_ckpt));
-        }
+            Some(asst_stream)
+        } else {
+            None
+        };
+        let cum_after_asst_toks = history_toks.clone();
+
+        prepared.push(PreparedTurnStreams {
+            shared_prompt,
+            shared_full,
+            cum_prompt_toks,
+            cum_prompt_stream,
+            cum_after_asst_toks,
+            cum_asst_stream,
+        });
     }
 
-    let cumulative_cold_ms: f64 = cumulative_coding_turns
+    let mut shared_cold_samples = vec![Vec::with_capacity(reps); cfg.num_turns];
+    let mut shared_warm_samples = vec![Vec::with_capacity(reps); cfg.num_turns];
+    let mut cum_cold_samples = vec![Vec::with_capacity(reps); cfg.num_turns];
+    let mut cum_warm_samples = vec![Vec::with_capacity(reps); cfg.num_turns];
+    let mut shared_parity: Vec<Option<TurnReuseMetrics>> = vec![None; cfg.num_turns];
+    let mut cum_parity: Vec<Option<TurnReuseMetrics>> = vec![None; cfg.num_turns];
+    let mut last_cache_stats = HybridPrefixStats::default();
+
+    for pass in 0..(warmup_runs + reps) {
+        let is_warmup = pass < warmup_runs;
+        let check_parity = pass == warmup_runs;
+        let mut radix_cache = HybridPrefixRadixCache::new(64, 4 << 30);
+
+        for (idx, p) in prepared.iter().enumerate() {
+            let turn = idx + 1;
+            let total_len = p.shared_prompt.len();
+
+            let mut cold_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
+            cold_contract.allocate_request(1)?;
+            sync_device(dev)?;
+            let t_cold = Instant::now();
+            let (cold_gdn, cold_attn) =
+                forward_hybrid_chunk(&mut cold_contract, 1, &p.shared_full)?;
+            sync_device(dev)?;
+            let cold_ms = t_cold.elapsed().as_secs_f64() * 1e3;
+
+            let mut warm_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
+            warm_contract.allocate_request(1)?;
+            sync_device(dev)?;
+            let t_warm = Instant::now();
+            let (reused_len, warm_gdn, warm_attn, ckpt_bytes) = if let Some((ckpt, suffix_toks)) =
+                radix_cache.match_longest_prefix(&provenance, &p.shared_prompt)
+            {
+                let offset = warm_contract.import_prefix_checkpoint(1, &ckpt)?;
+                debug_assert_eq!(offset + suffix_toks.len(), total_len);
+                let suffix_stream = p.shared_full.slice(offset, suffix_toks.len())?;
+                let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &suffix_stream)?;
+                (offset, yg, ya, ckpt.total_bytes())
+            } else {
+                let _ = forward_hybrid_chunk(&mut warm_contract, 1, &shared_stream)?;
+                let shared_ckpt =
+                    warm_contract.export_prefix_checkpoint(1, provenance.clone(), &shared_toks)?;
+                let cbytes = shared_ckpt.total_bytes();
+                assert!(radix_cache.insert(shared_ckpt));
+                let suffix_stream = p.shared_full.slice(shared_len, cfg.user_turn_tokens)?;
+                let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &suffix_stream)?;
+                (0usize, yg, ya, cbytes)
+            };
+            sync_device(dev)?;
+            let warm_ms = t_warm.elapsed().as_secs_f64() * 1e3;
+
+            if !is_warmup {
+                shared_cold_samples[idx].push(cold_ms);
+                shared_warm_samples[idx].push(warm_ms);
+            }
+            if check_parity {
+                shared_parity[idx] = Some(compare_hybrid_turn(
+                    turn,
+                    "shared_agent_base",
+                    cfg,
+                    dtype,
+                    total_len,
+                    reused_len,
+                    cold_ms,
+                    warm_ms,
+                    ckpt_bytes,
+                    &cold_contract,
+                    &warm_contract,
+                    &cold_gdn,
+                    &warm_gdn,
+                    &cold_attn,
+                    &warm_attn,
+                )?);
+            }
+        }
+
+        for (idx, p) in prepared.iter().enumerate() {
+            let turn = idx + 1;
+            let prompt_len = p.cum_prompt_toks.len();
+
+            let mut cold_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
+            cold_contract.allocate_request(1)?;
+            sync_device(dev)?;
+            let t_cold = Instant::now();
+            let (cold_gdn, cold_attn) =
+                forward_hybrid_chunk(&mut cold_contract, 1, &p.cum_prompt_stream)?;
+            sync_device(dev)?;
+            let cold_ms = t_cold.elapsed().as_secs_f64() * 1e3;
+
+            let mut warm_contract = build_hybrid_contract(cfg, max_cum_len, dtype, dev)?;
+            warm_contract.allocate_request(1)?;
+            sync_device(dev)?;
+            let t_warm = Instant::now();
+            let (reused_len, warm_gdn, warm_attn, ckpt_bytes) = if let Some((ckpt, suffix_toks)) =
+                radix_cache.match_longest_prefix(&provenance, &p.cum_prompt_toks)
+            {
+                let offset = warm_contract.import_prefix_checkpoint(1, &ckpt)?;
+                let suffix_stream = p.cum_prompt_stream.slice(offset, suffix_toks.len())?;
+                let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &suffix_stream)?;
+                (offset, yg, ya, ckpt.total_bytes())
+            } else {
+                let (yg, ya) = forward_hybrid_chunk(&mut warm_contract, 1, &p.cum_prompt_stream)?;
+                (0usize, yg, ya, 0usize)
+            };
+            sync_device(dev)?;
+            let warm_ms = t_warm.elapsed().as_secs_f64() * 1e3;
+
+            if !is_warmup {
+                cum_cold_samples[idx].push(cold_ms);
+                cum_warm_samples[idx].push(warm_ms);
+            }
+            if check_parity {
+                cum_parity[idx] = Some(compare_hybrid_turn(
+                    turn,
+                    "cumulative_coding_chat",
+                    cfg,
+                    dtype,
+                    prompt_len,
+                    reused_len,
+                    cold_ms,
+                    warm_ms,
+                    ckpt_bytes,
+                    &cold_contract,
+                    &warm_contract,
+                    &cold_gdn,
+                    &warm_gdn,
+                    &cold_attn,
+                    &warm_attn,
+                )?);
+            }
+
+            if let Some(ref asst_stream) = p.cum_asst_stream {
+                let _ = forward_hybrid_chunk(&mut warm_contract, 1, asst_stream)?;
+                let turn_ckpt = warm_contract.export_prefix_checkpoint(
+                    1,
+                    provenance.clone(),
+                    &p.cum_after_asst_toks,
+                )?;
+                assert!(radix_cache.insert(turn_ckpt));
+            }
+        }
+        last_cache_stats = radix_cache.stats();
+    }
+
+    let finalize_turn = |mut base: TurnReuseMetrics,
+                         c_samples: Vec<f64>,
+                         w_samples: Vec<f64>|
+     -> TurnReuseMetrics {
+        let sp_samples: Vec<f64> = c_samples
+            .iter()
+            .zip(&w_samples)
+            .map(|(&c, &w)| c / w.max(1e-6))
+            .collect();
+        let c_stats = SummaryStats::from_samples(&c_samples);
+        let w_stats = SummaryStats::from_samples(&w_samples);
+        let sp_stats = SummaryStats::from_samples(&sp_samples);
+        base.cold_reprefill_ms = c_stats.median;
+        base.warm_prefix_reuse_ms = w_stats.median;
+        base.ttft_speedup = sp_stats.median;
+        base.cold_ms_samples = c_samples;
+        base.warm_ms_samples = w_samples;
+        base.cold_ms_stats = c_stats;
+        base.warm_ms_stats = w_stats;
+        base.ttft_speedup_stats = sp_stats;
+        base
+    };
+
+    let shared_base_turns: Vec<TurnReuseMetrics> = shared_parity
+        .into_iter()
+        .zip(shared_cold_samples)
+        .zip(shared_warm_samples)
+        .map(|((p, cs), ws)| finalize_turn(p.expect("parity recorded"), cs, ws))
+        .collect();
+
+    let cumulative_coding_turns: Vec<TurnReuseMetrics> = cum_parity
+        .into_iter()
+        .zip(cum_cold_samples)
+        .zip(cum_warm_samples)
+        .map(|((p, cs), ws)| finalize_turn(p.expect("parity recorded"), cs, ws))
+        .collect();
+
+    let mut cumulative_cold_ms_samples = vec![0.0f64; reps];
+    let mut cumulative_warm_ms_samples = vec![0.0f64; reps];
+    for r in 0..reps {
+        cumulative_cold_ms_samples[r] = cumulative_coding_turns
+            .iter()
+            .map(|t| t.cold_ms_samples[r])
+            .sum();
+        cumulative_warm_ms_samples[r] = cumulative_coding_turns
+            .iter()
+            .map(|t| t.warm_ms_samples[r])
+            .sum();
+    }
+    let cumulative_speedup_samples: Vec<f64> = cumulative_cold_ms_samples
         .iter()
-        .map(|t| t.cold_reprefill_ms)
-        .sum();
-    let cumulative_warm_ms: f64 = cumulative_coding_turns
-        .iter()
-        .map(|t| t.warm_prefix_reuse_ms)
-        .sum();
+        .zip(&cumulative_warm_ms_samples)
+        .map(|(&c, &w)| c / w.max(1e-6))
+        .collect();
+
+    let cumulative_cold_ms_stats = SummaryStats::from_samples(&cumulative_cold_ms_samples);
+    let cumulative_warm_ms_stats = SummaryStats::from_samples(&cumulative_warm_ms_samples);
+    let cumulative_ttft_speedup_stats = SummaryStats::from_samples(&cumulative_speedup_samples);
+
     let total_saved_prefill_flops: f64 = cumulative_coding_turns
         .iter()
         .map(|t| t.saved_prefill_flops)
@@ -1047,21 +1246,29 @@ pub fn evaluate_multiturn_hybrid_prefix_reuse(
         .iter()
         .map(|t| t.saved_kv_write_bytes)
         .sum();
-    let cache_stats = radix_cache.stats();
     set_hybrid_prefix_cache_override(None);
 
     Ok(HybridMultiturnEvalReport {
         backend: backend_label(dev),
         dtype: format!("{dtype:?}"),
+        is_synthetic_microbench: true,
+        warmup_runs,
+        repetitions: reps,
         config: cfg.clone(),
         shared_base_turns,
         cumulative_coding_turns,
-        cumulative_cold_ms,
-        cumulative_warm_ms,
-        cumulative_ttft_speedup: cumulative_cold_ms / cumulative_warm_ms.max(1e-6),
+        cumulative_cold_ms: cumulative_cold_ms_stats.median,
+        cumulative_warm_ms: cumulative_warm_ms_stats.median,
+        cumulative_ttft_speedup: cumulative_ttft_speedup_stats.median,
+        cumulative_cold_ms_samples,
+        cumulative_warm_ms_samples,
+        cumulative_speedup_samples,
+        cumulative_cold_ms_stats,
+        cumulative_warm_ms_stats,
+        cumulative_ttft_speedup_stats,
         total_saved_prefill_flops,
         total_saved_kv_write_bytes,
-        cache_stats,
+        cache_stats: last_cache_stats,
     })
 }
 
@@ -1113,6 +1320,11 @@ fn compare_hybrid_turn(
         cold_reprefill_ms: cold_ms,
         warm_prefix_reuse_ms: warm_ms,
         ttft_speedup: cold_ms / warm_ms.max(1e-6),
+        cold_ms_samples: vec![cold_ms],
+        warm_ms_samples: vec![warm_ms],
+        cold_ms_stats: SummaryStats::from_samples(&[cold_ms]),
+        warm_ms_stats: SummaryStats::from_samples(&[warm_ms]),
+        ttft_speedup_stats: SummaryStats::from_samples(&[cold_ms / warm_ms.max(1e-6)]),
         saved_prefill_flops: estimate_prefill_flops_saved(cfg, reused_len, total_len),
         saved_kv_write_bytes: reused_len * kv_bytes_per_tok,
         checkpoint_bytes: ckpt_bytes,
@@ -1159,6 +1371,7 @@ pub fn verify_hybrid_prefix_provenance_isolation(
         user_turn_tokens: 16,
         assistant_turn_tokens: 8,
         num_turns: 2,
+        repetitions: 1,
     };
     let prefix_len = 80usize;
     let query_len = 96usize;
@@ -1273,7 +1486,7 @@ pub fn evaluate_phase_aware_kv_precision(
     let num_heads = 24usize;
     let num_kv_heads = 2usize;
     let block_size = DEFAULT_BLOCK_SIZE;
-    let prefill_seq_len = 1024usize;
+    let prefill_seq_len = if dev.is_cuda() { 1024usize } else { 256usize };
     let mut points = Vec::with_capacity(head_dims.len() * context_lens.len());
 
     for &head_dim in head_dims {
@@ -1645,11 +1858,25 @@ fn evaluate_single_kv_phase_point(
     let bf16_kv_bytes = (2 * num_kv_heads * ctx_len * head_dim * 2) as f64;
     let fp8_kv_bytes = (2 * num_kv_heads * ctx_len * head_dim) as f64;
     let mib = (1024 * 1024) as f64;
+    let policy = active_kv_phase_policy();
+    let phase_aware_used_fp8 = policy.decode_page_dtype(DType::BF16, ctx_len) == DType::F8E4M3;
+
+    // Resident 36-layer allocation accounting for paged block capacity + per-layer/per-head f32 scales.
+    let bf16_layer_alloc_bytes =
+        (kc_bf16.elem_count() + vc_bf16.elem_count()) * DType::BF16.size_in_bytes();
+    let fp8_scale_meta_bytes = 2 * num_kv_heads * std::mem::size_of::<f32>();
+    let fp8_layer_alloc_bytes = (kc_fp8.elem_count() + vc_fp8.elem_count())
+        * DType::F8E4M3.size_in_bytes()
+        + fp8_scale_meta_bytes;
+    let measured_bf16_kv_alloc_bytes = REF_DECODER_KV_LAYERS * bf16_layer_alloc_bytes;
+    let measured_fp8_kv_plus_scale_bytes = REF_DECODER_KV_LAYERS * fp8_layer_alloc_bytes;
 
     Ok(KvPhasePointMetrics {
         head_dim,
         context_len: ctx_len,
         prefill_seq_len: prefill_len,
+        phase_aware_used_fp8,
+        decode_speedup_is_native: true,
         bf16_prefill_us,
         fp8_always_prefill_us,
         phase_aware_prefill_us,
@@ -1662,6 +1889,11 @@ fn evaluate_single_kv_phase_point(
         fp8_decode_gb_s: fp8_kv_bytes / (fp8_decode_us * 1e3),
         bf16_kv_36l_mib: (bf16_kv_bytes * REF_DECODER_KV_LAYERS as f64) / mib,
         fp8_kv_36l_mib: (fp8_kv_bytes * REF_DECODER_KV_LAYERS as f64) / mib,
+        analytic_kv_bytes_ratio: bf16_kv_bytes / fp8_kv_bytes.max(1.0),
+        measured_bf16_kv_alloc_bytes,
+        measured_fp8_kv_plus_scale_bytes,
+        measured_kv_alloc_bytes_ratio: (measured_bf16_kv_alloc_bytes as f64)
+            / (measured_fp8_kv_plus_scale_bytes.max(1) as f64),
         bf16_decode_max_rel_vs_f32: max_rel_err(&got_bf16_v, &ref_dec_v),
         fp8_decode_max_rel_vs_f32: max_rel_err(&got_fp8_v, &ref_dec_v),
         fp8_decode_rmse_vs_bf16: rmse_err(&got_fp8_v, &got_bf16_v),
@@ -1701,6 +1933,8 @@ fn evaluate_single_kv_phase_point_portable(
 ) -> Result<KvPhasePointMetrics> {
     use float8::F8E4M3;
 
+    let policy = active_kv_phase_policy();
+    let phase_aware_used_fp8 = policy.decode_page_dtype(DType::BF16, ctx_len) == DType::F8E4M3;
     let scale = 1.0 / (head_dim as f32).sqrt();
     let k_vec = seeded_vec(
         num_kv_heads * ctx_len * head_dim,
@@ -1743,7 +1977,7 @@ fn evaluate_single_kv_phase_point_portable(
         sliding_window: None,
         sinks: None,
     };
-    let ref_v = tensor_f32_vec(&Sdpa.run_attention(
+    let ref_dec_v = tensor_f32_vec(&Sdpa.run_attention(
         &q_dec,
         &k_f32,
         &v_f32,
@@ -1751,8 +1985,7 @@ fn evaluate_single_kv_phase_point_portable(
         None,
         &params,
     )?)?;
-    let t0 = Instant::now();
-    let bf16_v = tensor_f32_vec(&Sdpa.run_attention(
+    let bf16_dec_v = tensor_f32_vec(&Sdpa.run_attention(
         &q_dec,
         &k_bf16,
         &v_bf16,
@@ -1760,9 +1993,7 @@ fn evaluate_single_kv_phase_point_portable(
         None,
         &params,
     )?)?;
-    let bf16_decode_us = t0.elapsed().as_secs_f64() * 1e6;
-    let t1 = Instant::now();
-    let fp8_v = tensor_f32_vec(&Sdpa.run_attention(
+    let fp8_dec_v = tensor_f32_vec(&Sdpa.run_attention(
         &q_dec,
         &k_fp8,
         &v_fp8,
@@ -1770,21 +2001,135 @@ fn evaluate_single_kv_phase_point_portable(
         None,
         &params,
     )?)?;
-    let fp8_decode_us = t1.elapsed().as_secs_f64() * 1e6;
+
+    // Portable CPU fallback upcasts both BF16 and FP8 KV to F32 before matmul; measure with
+    // warmup + median of 5 reps and mark decode_speedup_is_native = false.
+    let bf16_decode_us = bench_portable_op_us(dev, 3, 5, || {
+        Sdpa.run_attention(
+            &q_dec,
+            &k_bf16,
+            &v_bf16,
+            &AttentionMask::None,
+            None,
+            &params,
+        )
+    })?;
+    let fp8_decode_us = bench_portable_op_us(dev, 3, 5, || {
+        Sdpa.run_attention(&q_dec, &k_fp8, &v_fp8, &AttentionMask::None, None, &params)
+    })?;
+
+    // Separate causal prefill measurement on [0..prefill_len] (seq_q = prefill_len > 1).
+    let q_pre_f32 = seeded_tensor(
+        &[1, num_heads, prefill_len, head_dim],
+        (prefill_len + head_dim) as u64 + 404,
+        0.35,
+        dev,
+    )?;
+    let q_pre_bf16 = q_pre_f32.to_dtype(DType::BF16)?.to_dtype(DType::F32)?;
+    let k_pre_f32 = k_f32.narrow(2, 0, prefill_len)?.contiguous()?;
+    let v_pre_f32 = v_f32.narrow(2, 0, prefill_len)?.contiguous()?;
+    let k_pre_bf16 = k_bf16.narrow(2, 0, prefill_len)?.contiguous()?;
+    let v_pre_bf16 = v_bf16.narrow(2, 0, prefill_len)?.contiguous()?;
+    let k_pre_fp8 = k_fp8.narrow(2, 0, prefill_len)?.contiguous()?;
+    let v_pre_fp8 = v_fp8.narrow(2, 0, prefill_len)?.contiguous()?;
+    let pre_mask = AttentionMask::Custom(build_causal_suffix_mask(
+        prefill_len,
+        prefill_len,
+        DType::F32,
+        dev,
+    )?);
+
+    let ref_pre_v = tensor_f32_vec(
+        &Sdpa.run_attention(&q_pre_f32, &k_pre_f32, &v_pre_f32, &pre_mask, None, &params)?,
+    )?;
+    let phase_aware_pre_v = tensor_f32_vec(&Sdpa.run_attention(
+        &q_pre_bf16,
+        &k_pre_bf16,
+        &v_pre_bf16,
+        &pre_mask,
+        None,
+        &params,
+    )?)?;
+    let fp8_always_pre_v = tensor_f32_vec(&Sdpa.run_attention(
+        &q_pre_bf16,
+        &k_pre_fp8,
+        &v_pre_fp8,
+        &pre_mask,
+        None,
+        &params,
+    )?)?;
+
+    let k_pre_raw_v = tensor_f32_vec(&k_pre_f32)?;
+    let v_pre_raw_v = tensor_f32_vec(&v_pre_f32)?;
+
+    let bf16_prefill_us = bench_portable_op_us(dev, 3, 5, || {
+        let _kb = k_pre_f32.to_dtype(DType::BF16)?;
+        let _vb = v_pre_f32.to_dtype(DType::BF16)?;
+        Sdpa.run_attention(
+            &q_pre_bf16,
+            &k_pre_bf16,
+            &v_pre_bf16,
+            &pre_mask,
+            None,
+            &params,
+        )
+    })?;
+    let phase_aware_prefill_us = bench_portable_op_us(dev, 3, 5, || {
+        if phase_aware_used_fp8 {
+            std::hint::black_box(quant_fp8(&k_pre_raw_v));
+            std::hint::black_box(quant_fp8(&v_pre_raw_v));
+        } else {
+            let _kb = k_pre_f32.to_dtype(DType::BF16)?;
+            let _vb = v_pre_f32.to_dtype(DType::BF16)?;
+        }
+        Sdpa.run_attention(
+            &q_pre_bf16,
+            &k_pre_bf16,
+            &v_pre_bf16,
+            &pre_mask,
+            None,
+            &params,
+        )
+    })?;
+    let fp8_always_prefill_us = bench_portable_op_us(dev, 3, 5, || {
+        let kf = Tensor::from_vec(
+            quant_fp8(&k_pre_raw_v),
+            (1, num_kv_heads, prefill_len, head_dim),
+            dev,
+        )?;
+        let vf = Tensor::from_vec(
+            quant_fp8(&v_pre_raw_v),
+            (1, num_kv_heads, prefill_len, head_dim),
+            dev,
+        )?;
+        Sdpa.run_attention(&q_pre_bf16, &kf, &vf, &pre_mask, None, &params)
+    })?;
 
     let bf16_kv_bytes = (2 * num_kv_heads * ctx_len * head_dim * 2) as f64;
     let fp8_kv_bytes = (2 * num_kv_heads * ctx_len * head_dim) as f64;
     let mib = (1024 * 1024) as f64;
 
+    // NormalCache rounds capacity to CACHE_GROW_SIZE (512 tokens) + per-layer/per-head f32 scales.
+    let alloc_tokens = ctx_len
+        .max(1)
+        .next_multiple_of(super::NormalCache::CACHE_GROW_SIZE);
+    let bf16_layer_alloc_bytes = 2 * num_kv_heads * alloc_tokens * head_dim * 2;
+    let fp8_scale_meta_bytes = 2 * num_kv_heads * std::mem::size_of::<f32>();
+    let fp8_layer_alloc_bytes = 2 * num_kv_heads * alloc_tokens * head_dim + fp8_scale_meta_bytes;
+    let measured_bf16_kv_alloc_bytes = REF_DECODER_KV_LAYERS * bf16_layer_alloc_bytes;
+    let measured_fp8_kv_plus_scale_bytes = REF_DECODER_KV_LAYERS * fp8_layer_alloc_bytes;
+
     Ok(KvPhasePointMetrics {
         head_dim,
         context_len: ctx_len,
         prefill_seq_len: prefill_len,
-        bf16_prefill_us: bf16_decode_us,
-        fp8_always_prefill_us: fp8_decode_us,
-        phase_aware_prefill_us: bf16_decode_us,
-        fp8_always_prefill_max_rel: max_rel_err(&fp8_v, &ref_v),
-        phase_aware_prefill_max_rel: max_rel_err(&bf16_v, &ref_v),
+        phase_aware_used_fp8,
+        decode_speedup_is_native: false,
+        bf16_prefill_us,
+        fp8_always_prefill_us,
+        phase_aware_prefill_us,
+        fp8_always_prefill_max_rel: max_rel_err(&fp8_always_pre_v, &ref_pre_v),
+        phase_aware_prefill_max_rel: max_rel_err(&phase_aware_pre_v, &ref_pre_v),
         bf16_decode_us,
         fp8_decode_us,
         decode_speedup: bf16_decode_us / fp8_decode_us.max(1e-6),
@@ -1792,11 +2137,38 @@ fn evaluate_single_kv_phase_point_portable(
         fp8_decode_gb_s: fp8_kv_bytes / (fp8_decode_us * 1e3),
         bf16_kv_36l_mib: (bf16_kv_bytes * REF_DECODER_KV_LAYERS as f64) / mib,
         fp8_kv_36l_mib: (fp8_kv_bytes * REF_DECODER_KV_LAYERS as f64) / mib,
-        bf16_decode_max_rel_vs_f32: max_rel_err(&bf16_v, &ref_v),
-        fp8_decode_max_rel_vs_f32: max_rel_err(&fp8_v, &ref_v),
-        fp8_decode_rmse_vs_bf16: rmse_err(&fp8_v, &bf16_v),
-        fp8_decode_cosine_vs_f32: cosine_similarity(&fp8_v, &ref_v),
+        analytic_kv_bytes_ratio: bf16_kv_bytes / fp8_kv_bytes.max(1.0),
+        measured_bf16_kv_alloc_bytes,
+        measured_fp8_kv_plus_scale_bytes,
+        measured_kv_alloc_bytes_ratio: (measured_bf16_kv_alloc_bytes as f64)
+            / (measured_fp8_kv_plus_scale_bytes.max(1) as f64),
+        bf16_decode_max_rel_vs_f32: max_rel_err(&bf16_dec_v, &ref_dec_v),
+        fp8_decode_max_rel_vs_f32: max_rel_err(&fp8_dec_v, &ref_dec_v),
+        fp8_decode_rmse_vs_bf16: rmse_err(&fp8_dec_v, &bf16_dec_v),
+        fp8_decode_cosine_vs_f32: cosine_similarity(&fp8_dec_v, &ref_dec_v),
     })
+}
+
+fn bench_portable_op_us<F>(dev: &Device, warmup: usize, reps: usize, mut op: F) -> Result<f64>
+where
+    F: FnMut() -> Result<Tensor>,
+{
+    for _ in 0..warmup {
+        let out = op()?;
+        std::hint::black_box(&out);
+    }
+    dev.synchronize()?;
+    let n = reps.max(1);
+    let mut samples = Vec::with_capacity(n);
+    for _ in 0..n {
+        let t0 = Instant::now();
+        let out = op()?;
+        std::hint::black_box(&out);
+        dev.synchronize()?;
+        samples.push(t0.elapsed().as_secs_f64() * 1e6);
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(samples[samples.len() / 2])
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -1900,8 +2272,19 @@ mod tests {
             user_turn_tokens: 16,
             assistant_turn_tokens: 8,
             num_turns: 5,
+            repetitions: 3,
         };
         let rep = evaluate_multiturn_hybrid_prefix_reuse(&dev, DType::F32, &cfg)?;
+        assert_eq!(rep.warmup_runs, 1);
+        assert_eq!(rep.repetitions, 3);
+        assert!(rep.is_synthetic_microbench);
+        assert_eq!(rep.cumulative_cold_ms_samples.len(), 3);
+        assert_eq!(rep.cumulative_warm_ms_samples.len(), 3);
+        assert!(
+            rep.cumulative_ttft_speedup_stats.ci95_low <= rep.cumulative_ttft_speedup_stats.mean
+                && rep.cumulative_ttft_speedup_stats.mean
+                    <= rep.cumulative_ttft_speedup_stats.ci95_high
+        );
         for t in rep
             .shared_base_turns
             .iter()

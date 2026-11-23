@@ -31,8 +31,8 @@ pub use phase_policy::{
     set_hybrid_prefix_cache_override, set_kv_phase_policy_override,
     verify_hybrid_prefix_provenance_isolation, HybridEvalConfig, HybridMultiturnEvalReport,
     HybridPrefixRadixCache, HybridPrefixStats, KvPhaseEvalReport, KvPhasePointMetrics,
-    KvPhasePolicy, ProvenanceIsolationReport, TurnReuseMetrics, DEFAULT_MIN_FP8_DECODE_CTX,
-    ENV_ENGINE_HYBRID_PREFIX_CACHE, ENV_ENGINE_KV_PHASE_POLICY,
+    KvPhasePolicy, ProvenanceIsolationReport, SummaryStats, TurnReuseMetrics,
+    DEFAULT_MIN_FP8_DECODE_CTX, ENV_ENGINE_HYBRID_PREFIX_CACHE, ENV_ENGINE_KV_PHASE_POLICY,
 };
 pub use rotating_cache::{RotatingCache, RotatingCacheSnapshot};
 pub use single_cache::{SingleCache, SingleCacheSnapshot};
