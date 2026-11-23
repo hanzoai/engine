@@ -27,7 +27,7 @@ libc.workspace = true
 sha2.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
-hanzo-research = { version = "0.2.5", path = "../../ml-research-protocol/hanzo-research" }
+hanzo-research = { git = "https://github.com/hanzoai/ml", branch = "feat/unified-research-protocol", version = "0.2.5" }
 
 [dev-dependencies]
 tempfile.workspace = true
