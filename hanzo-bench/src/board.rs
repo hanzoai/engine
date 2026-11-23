@@ -622,6 +622,7 @@ fn uname() -> (String, String) {
     let mut u: libc::utsname = unsafe { std::mem::zeroed() };
     unsafe { libc::uname(&mut u) };
     let field = |b: &[libc::c_char]| -> String {
+        #[allow(clippy::unnecessary_cast)]
         let bytes: Vec<u8> = b
             .iter()
             .take_while(|c| **c != 0)
