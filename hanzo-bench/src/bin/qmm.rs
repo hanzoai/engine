@@ -92,6 +92,9 @@ fn read_lines_arg(raw: &str) -> Vec<String> {
     }
 }
 
+type QmmStageMeasurements = (Vec<f64>, Vec<f64>, f64, Vec<serde_json::Value>);
+
+#[allow(clippy::too_many_arguments)]
 fn measure_qmm_stage(
     device: &Device,
     dtype: DType,
@@ -101,7 +104,7 @@ fn measure_qmm_stage(
     m: usize,
     reps: usize,
     verbose: bool,
-) -> anyhow::Result<(Vec<f64>, Vec<f64>, f64, Vec<serde_json::Value>)> {
+) -> anyhow::Result<QmmStageMeasurements> {
     let mut cand_layer_samples = vec![0.0f64; reps];
     let mut base_layer_samples = vec![0.0f64; reps];
     let mut max_parity_diff = 0.0f64;
