@@ -211,7 +211,7 @@ fn main() -> Result<(), String> {
         /// version (Xcode 27 emits AIR v2.9 for iOS 27.2), which an iOS 26 device cannot load.
         fn min_os(&self) -> Option<&str> {
             match self {
-                Platform::MacOS => None,
+                Platform::MacOS => Some("-mmacosx-version-min=14.0"),
                 Platform::Ios if ios_simulator() => Some("-mios-simulator-version-min=18.0"),
                 Platform::Ios => Some("-mios-version-min=18.0"),
                 Platform::TvOS => Some("-mtvos-version-min=18.0"),
