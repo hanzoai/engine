@@ -613,15 +613,15 @@ struct BlockMMA {
     // Iterate over BK in blocks of kFragSize
     STEEL_PRAGMA_UNROLL
     for (short kk = 0; kk < BK; kk += kFragSize) {
-      simdgroup_barrier(mem_flags::mem_none);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
 
       Atile.template load<T, WM, 1, A_str_m, A_str_k>(As);
 
-      simdgroup_barrier(mem_flags::mem_none);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
 
       Btile.template load<T, 1, WN, B_str_k, B_str_n>(Bs);
 
-      simdgroup_barrier(mem_flags::mem_none);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
 
       tile_matmad(Ctile, Atile, Btile, Ctile);
 

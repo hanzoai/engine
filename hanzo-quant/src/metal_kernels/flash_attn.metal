@@ -148,7 +148,7 @@ kernel_flash_attn_ext_blk(constant flash_attn_ext_blk_kargs &args [[buffer(0)]],
   threadgroup int s_any_unmasked;
   if (tiisg == 0)
     s_any_unmasked = 0;
-  simdgroup_barrier(mem_flags::mem_threadgroup);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
 
   for (int jq = 0; jq < Q; ++jq) {
     const int iq = i1 * Q + jq;
@@ -164,7 +164,7 @@ kernel_flash_attn_ext_blk(constant flash_attn_ext_blk_kargs &args [[buffer(0)]],
       }
     }
   }
-  simdgroup_barrier(mem_flags::mem_threadgroup);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
 
   if (tiisg == 0) {
     if (s_any_unmasked) {
@@ -439,7 +439,7 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
 
 #pragma unroll(4)
           for (short i = 0; i < DK8 / 2; ++i) {
-            simdgroup_barrier(mem_flags::mem_none);
+            threadgroup_barrier(mem_flags::mem_threadgroup);
 
             simdgroup_load(mq[0], pq + 0 * 8 + 16 * i, DK);
             simdgroup_load(mq[1], pq + 1 * 8 + 16 * i, DK);
@@ -447,7 +447,7 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
             simdgroup_load(mk[0], pk + 0 * 8 + 16 * i, NS10, 0, true);
             simdgroup_load(mk[1], pk + 1 * 8 + 16 * i, NS10, 0, true);
 
-            simdgroup_barrier(mem_flags::mem_none);
+            threadgroup_barrier(mem_flags::mem_threadgroup);
 
             simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
             simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
@@ -744,7 +744,7 @@ kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
         }
       }
 
-      simdgroup_barrier(mem_flags::mem_threadgroup);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
 
       {
         const float m = M;
@@ -763,7 +763,7 @@ kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
         }
       }
 
-      simdgroup_barrier(mem_flags::mem_threadgroup);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
 
       for (short cc = 0; cc < C / NE; ++cc) {
         device const bfloat4 *pv4 =

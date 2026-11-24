@@ -413,7 +413,7 @@ strided_scan(const device T *in [[buffer(0)]], device U *out [[buffer(1)]],
     for (int i = 0; i < n_scans; i++) {
       values[i] = read_from[i];
     }
-    simdgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // Perform the scan
     for (int i = 0; i < n_scans; i++) {
