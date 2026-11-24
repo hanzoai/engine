@@ -1,0 +1,8 @@
+name: Debug Rust CI
+on: [push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: cargo check -p hanzo-engine
