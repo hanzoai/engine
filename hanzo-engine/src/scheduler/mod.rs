@@ -85,3 +85,4 @@ pub trait Scheduler: Send + Sync {
     /// to synchronize with the global no_prefix_cache setting.
     fn set_prefix_caching_enabled(&mut self, enabled: bool);
 }
+pub mod thermal_policy;
