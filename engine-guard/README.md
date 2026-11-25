@@ -48,7 +48,7 @@ Only dependency: Python 3.8+ and (recommended, cross-platform) `psutil`. Without
 
 ## Tuning (env)
 
-- `HANZO_ENGINE_RUNAWAY_CEILING` — kill-all threshold (default 256).
+- `ENGINE_RUNAWAY_CEILING` - kill-all threshold (default 256).
 
 ## Known limitation
 

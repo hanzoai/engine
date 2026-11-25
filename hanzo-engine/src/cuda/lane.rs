@@ -247,11 +247,15 @@ pub(crate) mod tests {
     #[test]
     fn gate_matches_reference() {
         if !std::env::args().any(|a| a == "--exact")
-            && std::env::var_os("HANZO_CUDA_CAPTURE_ISOLATED").is_none()
+            && crate::engine_env_os(
+                "ENGINE_CUDA_CAPTURE_ISOLATED",
+                "HANZO_CUDA_CAPTURE_ISOLATED",
+            )
+            .is_none()
         {
             let exe = std::env::current_exe().unwrap();
             let out = std::process::Command::new(exe)
-                .env("HANZO_CUDA_CAPTURE_ISOLATED", "1")
+                .env("ENGINE_CUDA_CAPTURE_ISOLATED", "1")
                 .args([
                     "--exact",
                     "cuda::lane::tests::gate_matches_reference",

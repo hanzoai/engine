@@ -251,8 +251,16 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     // NCCL case!
 
     let local_world_size = available_devices.len();
-    let global_world_size = if let Ok(x) = std::env::var("MN_GLOBAL_WORLD_SIZE") {
-        usize::from_str(&x).context("MN_GLOBAL_WORLD_SIZE")?
+    let mn_var = |engine_k: &str, bare_k: &str, legacy_k: &str| {
+        crate::engine_env_var(engine_k, bare_k).or_else(|_| std::env::var(legacy_k))
+    };
+    let global_ws_env = mn_var(
+        "ENGINE_MN_GLOBAL_WORLD_SIZE",
+        "MN_GLOBAL_WORLD_SIZE",
+        "HANZO_MN_GLOBAL_WORLD_SIZE",
+    );
+    let global_world_size = if let Ok(x) = &global_ws_env {
+        usize::from_str(x).context("ENGINE_MN_GLOBAL_WORLD_SIZE")?
     } else {
         // global world size is always >= local world size
         std::cmp::max(
@@ -261,9 +269,9 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         )
     };
 
-    let use_multi_node = std::env::var("MN_GLOBAL_WORLD_SIZE").is_ok();
+    let use_multi_node = global_ws_env.is_ok();
     if use_multi_node {
-        info!("MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
+        info!("ENGINE_MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
     }
 
     if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
@@ -337,19 +345,31 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         0
     };
 
+    let worker_addr_env = mn_var(
+        "ENGINE_MN_WORKER_SERVER_ADDR",
+        "MN_WORKER_SERVER_ADDR",
+        "HANZO_MN_WORKER_SERVER_ADDR",
+    )
+    .or_else(|_| env::var("HANZO_WORKER_SERVER_ADDR"));
+
     if use_multi_node {
-        if let Ok(n_nodes) = env::var("MN_HEAD_NUM_WORKERS") {
-            let n_nodes = usize::from_str(&n_nodes).context("MN_HEAD_NUM_WORKERS")?;
+        if let Ok(n_nodes) = mn_var(
+            "ENGINE_MN_HEAD_NUM_WORKERS",
+            "MN_HEAD_NUM_WORKERS",
+            "HANZO_MN_HEAD_NUM_WORKERS",
+        ) {
+            let n_nodes = usize::from_str(&n_nodes).context("ENGINE_MN_HEAD_NUM_WORKERS")?;
             info!("Head node managing {n_nodes} workers.");
-            let Ok(port) = env::var("MN_HEAD_PORT") else {
-                anyhow::bail!("Got MN_HEAD_NUM_WORKERS, expected MN_HEAD_PORT");
+            let Ok(port) = mn_var("ENGINE_MN_HEAD_PORT", "MN_HEAD_PORT", "HANZO_MN_HEAD_PORT")
+            else {
+                anyhow::bail!("Got ENGINE_MN_HEAD_NUM_WORKERS, expected ENGINE_MN_HEAD_PORT");
             };
             info!("Head node initializing connection on {port}.");
             let server =
                 hanzo_quant::Server::new(&format!("0.0.0.0:{port}"), n_nodes, local_world_size)?;
 
             server.broadcast_id(&id)?;
-        } else if let Ok(addr) = env::var("MN_WORKER_SERVER_ADDR") {
+        } else if let Ok(addr) = &worker_addr_env {
             info!("Worker node connecting to {addr}.");
             let client = hanzo_quant::Client::new(addr.parse()?, local_world_size)?;
 
@@ -357,11 +377,12 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         }
     }
 
-    let rank_offset = if env::var("MN_WORKER_SERVER_ADDR").is_ok() {
-        let Ok(node_id) = env::var("MN_WORKER_ID") else {
-            anyhow::bail!("Got MN_WORKER_SERVER_ADDR, expected MN_WORKER_ID");
+    let rank_offset = if worker_addr_env.is_ok() {
+        let Ok(node_id) = mn_var("ENGINE_MN_WORKER_ID", "MN_WORKER_ID", "HANZO_MN_WORKER_ID")
+        else {
+            anyhow::bail!("Got ENGINE_MN_WORKER_SERVER_ADDR, expected ENGINE_MN_WORKER_ID");
         };
-        let node_id = usize::from_str(&node_id).context("MN_WORKER_ID")?;
+        let node_id = usize::from_str(&node_id).context("ENGINE_MN_WORKER_ID")?;
         info!("Worker ID is {node_id}.");
         (node_id + 1) * local_world_size
     } else {

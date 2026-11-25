@@ -1,0 +1,121 @@
+{
+  "campaign": "engine-inference-1.7.109",
+  "repo": "hanzoai/engine",
+  "plan": {
+    "stages": [
+      {"name": "micro", "reps": 3, "prompt_len": 64, "gen_len": 16},
+      {"name": "medium", "reps": 5, "prompt_len": 256, "gen_len": 64},
+      {"name": "qualification", "reps": 8, "prompt_len": 512, "gen_len": 128}
+    ],
+    "higher_is_better": false,
+    "alpha": 0.05,
+    "family_budget": 5,
+    "min_relative_gain": 0.01
+  },
+  "objectives": [
+    {
+      "id": "hybrid_prefix",
+      "study": "hybrid-kv-prefix-isolation",
+      "objective": "Minimize hybrid KV prefix checkpoint & CacheBlend recompute latency without cross-slot drift",
+      "metric": "step_us",
+      "unit": "us",
+      "direction": "lower",
+      "family": "kv_cache",
+      "protected": false,
+      "baseline": 351.2,
+      "backends": ["CUDA", "ROCM", "METAL", "CPU"],
+      "shapes": ["pp512/tg128", "pp4096/tg128"],
+      "dataset": "hybrid_contract_concurrent"
+    },
+    {
+      "id": "phase_policy",
+      "study": "kv-phase-policy-32k",
+      "objective": "Optimize PhasePolicy prefill-to-decode KV transition across 4K-32K",
+      "metric": "step_us",
+      "unit": "us",
+      "direction": "lower",
+      "family": "kv_cache",
+      "protected": false,
+      "baseline": 240.0,
+      "backends": ["CUDA", "ROCM", "METAL", "CPU"],
+      "shapes": ["4096", "16384", "32768"],
+      "dataset": "phase_policy_suite"
+    },
+    {
+      "id": "replay_gdn",
+      "study": "replay-gdn-recurrent-slots",
+      "objective": "Minimize ReplayGDN recurrent state rollback & slot step latency",
+      "metric": "step_us",
+      "unit": "us",
+      "direction": "lower",
+      "family": "gdn",
+      "protected": false,
+      "baseline": 180.0,
+      "backends": ["CUDA", "ROCM", "VULKAN", "METAL", "CPU"],
+      "shapes": ["seq1", "seq64"],
+      "dataset": "replay_gdn_suite"
+    },
+    {
+      "id": "dflash2",
+      "study": "dflash2-speculative-verify",
+      "objective": "Improve DFlash2 batched draft verify latency per accepted token",
+      "metric": "verify_ms",
+      "unit": "ms",
+      "direction": "lower",
+      "family": "speculative",
+      "protected": false,
+      "baseline": 12.5,
+      "backends": ["CUDA", "METAL", "CPU"],
+      "shapes": ["gamma4", "gamma8"],
+      "dataset": "qwen3_dflash_suite"
+    },
+    {
+      "id": "gguf_qmm",
+      "study": "qwen3-8b-qmatmul-prefill",
+      "objective": "Minimize quantized GGUF projection GEMM latency across Qwen3-8B shapes",
+      "metric": "layer_gemm_ms",
+      "unit": "ms",
+      "direction": "lower",
+      "family": "quant_gemm",
+      "protected": false,
+      "baseline": 14.0,
+      "backends": ["CUDA", "METAL"],
+      "shapes": ["4096x4096", "12288x4096"],
+      "dataset": "Qwen3-8B-projection-shapes"
+    }
+  ],
+  "search_space": {
+    "kv_cache": [
+      {
+        "arm": "zero_copy_slot_isolation",
+        "variant": "pinned_checkpoint",
+        "hypothesis": "Zero-copy slot-isolated hybrid prefix checkpoints eliminate clone overhead",
+        "config": {"precision": "BF16", "next_hypothesis": "Extend pinned prefix reuse to 32K multi-agent turns"}
+      }
+    ],
+    "gdn": [
+      {
+        "arm": "fused_gdn_scan",
+        "variant": "slot_checkpoint_v2",
+        "hypothesis": "Fused ReplayGDN gating + recurrent slot isolation cuts decode step overhead",
+        "config": {"precision": "BF16", "next_hypothesis": "Combine ReplayGDN with Split-KV at 32K"}
+      }
+    ],
+    "speculative": [
+      {
+        "arm": "dflash2_batched_verify",
+        "variant": "gamma6_graph",
+        "hypothesis": "Batched single-weight-stream DFlash2 verify amortizes memory bandwidth",
+        "config": {"precision": "BF16", "next_hypothesis": "Test DFlash2 on Bonsai-2-27B PQ2_0"}
+      }
+    ],
+    "quant_gemm": [
+      {
+        "arm": "q4k_vs_q8_0",
+        "variant": "progressive_qmm",
+        "hypothesis": "Q4_K prefill GEMM reduces memory traffic vs Q8_0 across Qwen3-8B layers",
+        "config": {"precision": "Q4_K/BF16", "next_hypothesis": "Evaluate AFQ 4-bit group64 prefill"}
+      }
+    ]
+  }
+}

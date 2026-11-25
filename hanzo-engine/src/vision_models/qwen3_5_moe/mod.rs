@@ -42,6 +42,7 @@ pub struct Qwen3_5MoeModel {
     vision_start_token_id: u32,
     vision_end_token_id: u32,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    mrope_position_deltas: Mutex<Option<Tensor>>,
 }
 
 impl Qwen3_5MoeModel {
@@ -62,11 +63,7 @@ impl Qwen3_5MoeModel {
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),
         )?;
-        // Use top-level quantization_config if present, otherwise fall back to text_config's
-        let mut text_config = cfg.text_config.clone();
-        if cfg.quantization_config.is_some() {
-            text_config.quantization_config = cfg.quantization_config.clone();
-        }
+        let text_config = cfg.resolved_text_config();
         let text = Qwen3_5MoeTextModel::new(
             &text_config,
             vb.clone(),
@@ -83,6 +80,7 @@ impl Qwen3_5MoeModel {
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            mrope_position_deltas: Mutex::new(None),
         })
     }
 
@@ -404,44 +402,80 @@ impl Qwen3_5MoeModel {
             _ => (None, None),
         };
 
-        let mut ropeidx_attn_mask_bs = Vec::new();
-        let max_seqlens = *seqlens
-            .iter()
-            .max()
-            .ok_or(hanzo_ml::Error::Msg("seqlens is empty".to_string()))?;
-        for len in &seqlens {
-            ropeidx_attn_mask_bs.push(Tensor::new(
-                [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),
-                input_ids.device(),
-            )?);
-        }
-        let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
-        let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
-            input_ids_full,
-            rope_img_grid_thw.as_ref(),
-            rope_vid_grid_thw.as_ref(),
-            &AttentionMask::Custom(ropeidx_attn_mask.clone()),
-            self.spatial_merge_size,
-            self.image_token_id,
-            self.video_token_id,
-            self.vision_start_token_id,
-            self.vision_end_token_id,
-        )?;
-        let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            let full_len = position_ids.dim(2)?;
-            let trimmed_len = input_ids.dim(1)?;
-            position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
+        let is_decode = !is_first_chunk
+            && matches!(attention_mask, AttentionMask::None)
+            && seq_len == 1
+            && pixel_values.is_none()
+            && pixel_values_videos.is_none();
+        let has_vision_grid = rope_img_grid_thw.is_some() || rope_vid_grid_thw.is_some();
+        let cached_deltas = if is_decode {
+            self.mrope_position_deltas
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .filter(|d| d.dims() == [batch_size, 1])
         } else {
-            // Not only decode reaches here: a chunked prefill also arrives without a mask, and
-            // then this forward carries `len` tokens from each sequence's offset, not one.
-            let len = input_ids.dim(1)? as i64;
-            let rows = seqlen_offsets
+            None
+        };
+        let rope_positions = ctx
+            .paged_input_metadata()
+            .and_then(|meta| meta.rope_positions.as_ref())
+            .and_then(|rp| rp.get(&device.location()));
+
+        let position_ids = if is_decode && (!has_vision_grid || cached_deltas.is_some()) {
+            let deltas = if has_vision_grid {
+                cached_deltas.as_ref()
+            } else {
+                None
+            };
+            if let Some(rp) = rope_positions {
+                super::qwen3_5::decode_mrope_position_ids(rp, deltas)?
+            } else {
+                let offsets: Vec<u32> = seqlen_offsets.iter().map(|&o| o as u32).collect();
+                let rp = Tensor::from_vec(offsets, (batch_size,), &device)?;
+                super::qwen3_5::decode_mrope_position_ids(&rp, deltas)?
+            }
+        } else {
+            let mut ropeidx_attn_mask_bs = Vec::new();
+            let max_seqlens = *seqlens
                 .iter()
-                .map(|off| Tensor::arange(*off as i64, *off as i64 + len, input_ids.device()))
-                .collect::<Result<Vec<_>>>()?;
-            let mut position_ids = Tensor::stack(&rows, 0)?.unsqueeze(0)?.repeat((3, 1, 1))?;
-            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
-            position_ids
+                .max()
+                .ok_or(hanzo_ml::Error::Msg("seqlens is empty".to_string()))?;
+            for len in &seqlens {
+                ropeidx_attn_mask_bs.push(Tensor::new(
+                    [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),
+                    input_ids.device(),
+                )?);
+            }
+            let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
+            let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
+                input_ids_full,
+                rope_img_grid_thw.as_ref(),
+                rope_vid_grid_thw.as_ref(),
+                &AttentionMask::Custom(ropeidx_attn_mask.clone()),
+                self.spatial_merge_size,
+                self.image_token_id,
+                self.video_token_id,
+                self.vision_start_token_id,
+                self.vision_end_token_id,
+            )?;
+            if let Ok(mut guard) = self.mrope_position_deltas.lock() {
+                *guard = Some(mrope_position_deltas.clone());
+            }
+            if !matches!(attention_mask, AttentionMask::None) {
+                let full_len = position_ids.dim(2)?;
+                let trimmed_len = input_ids.dim(1)?;
+                position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
+            } else {
+                let len = input_ids.dim(1)? as i64;
+                let rows = seqlen_offsets
+                    .iter()
+                    .map(|off| Tensor::arange(*off as i64, *off as i64 + len, input_ids.device()))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut position_ids = Tensor::stack(&rows, 0)?.unsqueeze(0)?.repeat((3, 1, 1))?;
+                position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
+                position_ids
+            }
         };
 
         let out = self.text.forward_embeds(

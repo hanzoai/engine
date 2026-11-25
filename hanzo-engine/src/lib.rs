@@ -56,6 +56,17 @@ pub use video_input::{sample_frame_indices, smart_nframes, VideoInput, DEFAULT_S
 pub(crate) mod disk_kv_cache;
 mod embedding_models;
 mod kv_cache;
+pub use kv_cache::{
+    active_kv_phase_policy, evaluate_multiturn_hybrid_prefix_reuse,
+    evaluate_phase_aware_kv_precision, hybrid_prefix_cache_enabled,
+    set_hybrid_prefix_cache_override, set_kv_phase_policy_override,
+    verify_hybrid_prefix_provenance_isolation, CacheProvenance, HybridEvalConfig,
+    HybridMultiturnEvalReport, HybridPrefixCheckpoint, HybridPrefixRadixCache, HybridPrefixStats,
+    HybridReplayStep, HybridRequestBinding, HybridStateCheckpoint, HybridStateContract,
+    KvPhaseEvalReport, KvPhasePointMetrics, KvPhasePolicy, ProvenanceIsolationReport, SummaryStats,
+    TurnReuseMetrics, DEFAULT_MIN_FP8_DECODE_CTX, ENV_ENGINE_HYBRID_PREFIX_CACHE,
+    ENV_ENGINE_KV_PHASE_POLICY,
+};
 pub mod license;
 pub use license::{
     load_and_verify as load_and_verify_license, verify_license, License, LicenseError,
@@ -84,6 +95,7 @@ mod models;
 /// Load a llama-family base model into a `hanzo_train::BaseModel` from an engine-loaded
 /// `Llama`, for engine-backed LoRA training.
 pub use models::llama_train::load_llama_base_for_training;
+pub use models::replay_gdn;
 mod paged_attention;
 mod perf_flags;
 mod pipeline;
@@ -102,6 +114,7 @@ mod toml_selector;
 mod tools;
 mod topology;
 mod utils;
+pub use utils::{engine_env_bool, engine_env_os, engine_env_var};
 mod vision_models;
 mod xlora_models;
 #[cfg(feature = "zap")]

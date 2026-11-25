@@ -506,7 +506,7 @@ fn insert_reasoning_content(
 
 // shortcut: zen6-nano 2B 2-bit QAT MLX weights were identity-trained without MCP tool
 // qualification and collapse to a memorized refusal string whenever `<tools>` is rendered;
-// remove once tool-qualified zen6-nano weights ship (override with HANZO_NANO_ENABLE_TOOLS=1).
+// remove once tool-qualified zen6-nano weights ship (override with ENGINE_NANO_ENABLE_TOOLS=1).
 fn should_suppress_nano_tools(
     requested_model: &str,
     served_name: Option<&str>,
@@ -643,7 +643,8 @@ pub async fn parse_request(
         oairequest.tools.as_deref().unwrap_or_default(),
     )?;
     let loaded_models = state.list_models().unwrap_or_default();
-    let nano_tools_env = std::env::var("HANZO_NANO_ENABLE_TOOLS").ok();
+    let nano_tools_env =
+        hanzo_engine::engine_env_var("ENGINE_NANO_ENABLE_TOOLS", "HANZO_NANO_ENABLE_TOOLS").ok();
     let suppress_nano_tools = should_suppress_nano_tools(
         &oairequest.model,
         defaults.served_name.as_deref(),

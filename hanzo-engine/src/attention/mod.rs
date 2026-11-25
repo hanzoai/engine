@@ -464,7 +464,7 @@ impl Sdpa {
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
-        // Canonical DSL FlashAttention (gated behind HANZO_FLASH_IMPL=dsl; legacy default).
+        // Canonical DSL FlashAttention (gated behind ML_FLASH_IMPL=dsl; legacy default).
         if matches!(mask, AttentionMask::None | AttentionMask::CausalFlash)
             && flash_params.is_none_or(|p| p.cumulative_seqlens_q.is_empty())
             && hanzo_ml::quantized::dsl::flash_impl() == hanzo_ml::quantized::dsl::QkImpl::Dsl

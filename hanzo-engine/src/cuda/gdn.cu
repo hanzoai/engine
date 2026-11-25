@@ -712,40 +712,35 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
 
 template <typename T>
 __global__ void
-fused_gdn_gating_kernel(const T *__restrict__ b,           // [total]
-                        const T *__restrict__ a,           // [total]
-                        const float *__restrict__ a_log,   // [num_heads]
-                        const float *__restrict__ dt_bias, // [num_heads]
-                        T *__restrict__ beta_out,          // [total]
-                        T *__restrict__ g_out,             // [total]
+fused_gdn_gating_kernel(const T *__restrict__ b,
+                        const T *__restrict__ a,
+                        const float *__restrict__ neg_exp_a,
+                        const float *__restrict__ dt_bias,
+                        T *__restrict__ beta_out,
+                        T *__restrict__ g_out,
                         int total_elements, int num_heads) {
 
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= total_elements)
     return;
 
-  // Head index: elements are laid out as [..., num_heads]
   int head_idx = idx % num_heads;
 
-  // beta = sigmoid(b)
   float b_val = (float)b[idx];
   float beta = 1.0f / (1.0f + expf(-b_val));
 
-  // g = -exp(a_log) * softplus(a + dt_bias)
   float a_val = (float)a[idx];
-  float a_log_val = a_log[head_idx];
-  float dt_bias_val = dt_bias[head_idx];
-
-  float sp_input = a_val + dt_bias_val;
-  float softplus_val = logf(1.0f + expf(sp_input));
-  float g_val = -expf(a_log_val) * softplus_val;
+  float sp_input = a_val + dt_bias[head_idx];
+  float softplus_val =
+      (sp_input > 20.0f) ? sp_input : log1pf(expf(sp_input));
+  float g_val = neg_exp_a[head_idx] * softplus_val;
 
   beta_out[idx] = (T)beta;
   g_out[idx] = (T)g_val;
 }
 
 extern "C" void fused_gdn_gating(const void *b, const void *a,
-                                 const float *a_log, const float *dt_bias,
+                                 const float *neg_exp_a, const float *dt_bias,
                                  void *beta_out, void *g_out,
                                  int total_elements, int num_heads, int dtype,
                                  int64_t stream) {
@@ -755,12 +750,16 @@ extern "C" void fused_gdn_gating(const void *b, const void *a,
 
   if (dtype == 0) {
     fused_gdn_gating_kernel<__half><<<grid, block, 0, custream>>>(
-        (const __half *)b, (const __half *)a, a_log, dt_bias,
+        (const __half *)b, (const __half *)a, neg_exp_a, dt_bias,
         (__half *)beta_out, (__half *)g_out, total_elements, num_heads);
-  } else {
+  } else if (dtype == 1) {
     fused_gdn_gating_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
-        (const __nv_bfloat16 *)b, (const __nv_bfloat16 *)a, a_log, dt_bias,
+        (const __nv_bfloat16 *)b, (const __nv_bfloat16 *)a, neg_exp_a, dt_bias,
         (__nv_bfloat16 *)beta_out, (__nv_bfloat16 *)g_out, total_elements,
         num_heads);
+  } else {
+    fused_gdn_gating_kernel<float><<<grid, block, 0, custream>>>(
+        (const float *)b, (const float *)a, neg_exp_a, dt_bias,
+        (float *)beta_out, (float *)g_out, total_elements, num_heads);
   }
 }

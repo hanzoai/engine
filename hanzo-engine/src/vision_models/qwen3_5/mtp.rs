@@ -221,10 +221,15 @@ impl SelfSpeculative for Qwen3_5Model {
             struct MtpQuantShim {
                 #[serde(default, alias = "quantization")]
                 quantization_config: Option<hanzo_quant::QuantizedConfig>,
+                #[serde(default)]
+                modules: Vec<hanzo_quant::AfqModuleSpec>,
             }
             if let Ok(shim) = serde_json::from_str::<MtpQuantShim>(&raw_cfg) {
                 if shim.quantization_config.is_some() {
                     head_cfg.quantization_config = shim.quantization_config;
+                }
+                if let Some(ref mut qcfg) = head_cfg.quantization_config {
+                    qcfg.with_afq_module_specs(&shim.modules);
                 }
             }
         }

@@ -360,9 +360,6 @@ impl BlockConv {
         })
     }
 
-    /// Convolve the sublayer input and hand back the taps [`finish`] needs.
-    ///
-    /// [`finish`]: BlockConv::finish
     fn prepare(&self, hidden: &Tensor) -> Result<(Tensor, Tensor)> {
         let slots = hidden.dim(0)?;
         let dynamic = self.kernel_projection.forward(hidden)?.reshape((
@@ -371,24 +368,47 @@ impl BlockConv {
             self.kernel_size,
             self.groups,
         ))?;
-        let pre = dynamic.narrow(1, 0, 1)?.squeeze(1)?;
-        let post = dynamic.narrow(1, 1, 1)?.squeeze(1)?;
-        Ok((self.convolve(hidden, &pre, 0)?, post))
+        Ok((self.convolve(hidden, &dynamic, 0, None)?, dynamic))
     }
 
-    /// Convolve the sublayer output with the taps [`prepare`] produced.
-    ///
-    /// [`prepare`]: BlockConv::prepare
+    #[cfg_attr(not(test), allow(dead_code))]
     fn finish(&self, hidden: &Tensor, dynamic: &Tensor) -> Result<Tensor> {
-        self.convolve(hidden, dynamic, 1)
+        self.convolve(hidden, dynamic, 1, None)
     }
 
-    /// `out[t] = Σ_offset (base_kernel[half, offset] + dynamic[t, offset]) · x[t - offset]`.
-    ///
-    /// The base tap is per-channel, the correction per group of `group_size`
-    /// channels. Slots before the block's start read zero rather than the previous
-    /// block's tail, which is what keeps one block's draft independent of the last.
-    fn convolve(&self, hidden: &Tensor, dynamic: &Tensor, half: usize) -> Result<Tensor> {
+    fn finish_residual(
+        &self,
+        hidden: &Tensor,
+        dynamic: &Tensor,
+        residual: &Tensor,
+    ) -> Result<Tensor> {
+        self.convolve(hidden, dynamic, 1, Some(residual))
+    }
+
+    fn convolve(
+        &self,
+        hidden: &Tensor,
+        dynamic: &Tensor,
+        half: usize,
+        residual: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if hidden.device().is_cuda()
+            && matches!(hidden.dtype(), DType::F16 | DType::BF16 | DType::F32)
+        {
+            return crate::cuda::dflash2::dflash2_block_conv_cuda(
+                crate::cuda::dflash2::DFlash2BlockConvParams {
+                    x: hidden,
+                    dynamic,
+                    base_kernel: &self.base_kernel,
+                    residual,
+                    kernel_size: self.kernel_size,
+                    group_size: self.group_size,
+                    half_idx: half,
+                },
+            );
+        }
+
         let (slots, hidden_size) = hidden.dims2()?;
         let x = hidden.reshape((slots, self.groups, self.group_size))?;
         let base = self.base_kernel.narrow(0, half, 1)?.reshape((
@@ -396,9 +416,9 @@ impl BlockConv {
             self.groups,
             self.group_size,
         ))?;
+        let dyn_half = dynamic.narrow(1, half, 1)?.squeeze(1)?;
         let mut out: Option<Tensor> = None;
         for offset in 0..self.kernel_size {
-            // A tap that reaches past the block start reads only zeros.
             if offset >= slots {
                 break;
             }
@@ -409,7 +429,7 @@ impl BlockConv {
                     .pad_with_zeros(0, offset, 0)?
             };
             let taps = base.narrow(0, offset, 1)?.broadcast_add(
-                &dynamic
+                &dyn_half
                     .narrow(1, offset, 1)?
                     .reshape((slots, self.groups, 1))?,
             )?;
@@ -419,9 +439,13 @@ impl BlockConv {
                 None => term,
             });
         }
-        match out {
-            Some(acc) => acc.reshape((slots, hidden_size)),
-            None => Tensor::zeros((slots, hidden_size), hidden.dtype(), hidden.device()),
+        let conv_out = match out {
+            Some(acc) => acc.reshape((slots, hidden_size))?,
+            None => Tensor::zeros((slots, hidden_size), hidden.dtype(), hidden.device())?,
+        };
+        match residual {
+            Some(res) => conv_out.add(res),
+            None => Ok(conv_out),
         }
     }
 }
@@ -525,16 +549,43 @@ impl CandidateSelector {
             return Ok((Vec::new(), empty));
         }
 
-        // On CUDA, run last-dim top-k on device so we only download [slots, top_k] (~4 KB)
-        // instead of the full [slots, vocab] (~15 MB) logit matrix.
         let mut cuda_flat_ids: Option<Tensor> = None;
         let (candidates, unary): (Vec<Vec<u32>>, Vec<Vec<f32>>) = if logits.device().is_cuda()
             && matches!(logits.dtype(), DType::F32 | DType::BF16 | DType::F16)
             && top_k > 0
         {
-            let crate::ops::TopKOutput { values, indices } =
-                crate::ops::TopKLastDimOp::topk(&logits.contiguous()?, top_k)?;
-            let vals_h = values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+            let (values, indices) = if top_k <= crate::cuda::dflash2::DFLASH2_MAX_TOPK {
+                let (vals, ids) = crate::cuda::dflash2::dflash2_topk_cuda(logits, top_k)?;
+                if temperature < 1e-5
+                    && !need_logits
+                    && self.predecessor_codebook.dim(1)?
+                        <= crate::cuda::dflash2::DFLASH2_MAX_WALK_RANK
+                    && matches!(hidden.dtype(), DType::F32 | DType::BF16 | DType::F16)
+                {
+                    let gate_hidden = self.hidden_projection.forward(hidden)?;
+                    let out_tokens = crate::cuda::dflash2::dflash2_greedy_walk_cuda(
+                        crate::cuda::dflash2::DFlash2GreedyWalkParams {
+                            topk_values: &vals,
+                            topk_indices: &ids,
+                            gate_hidden: &gate_hidden,
+                            pred_codebook: &self.predecessor_codebook,
+                            succ_codebook: &self.successor_codebook,
+                            anchor_token,
+                        },
+                    )?;
+                    let toks = out_tokens.to_vec1::<u32>()?;
+                    if let Some(bad_slot) = toks.iter().position(|&t| t == u32::MAX) {
+                        hanzo_ml::bail!("slot {bad_slot} has no finite logit");
+                    }
+                    return Ok((toks, None));
+                }
+                (vals, ids)
+            } else {
+                let crate::ops::TopKOutput { values, indices } =
+                    crate::ops::TopKLastDimOp::topk(&logits.contiguous()?, top_k)?;
+                (values.to_dtype(DType::F32)?, indices)
+            };
+            let vals_h = values.to_vec2::<f32>()?;
             let ids_h = indices.to_vec2::<u32>()?;
             let mut cands = Vec::with_capacity(slots);
             let mut uns = Vec::with_capacity(slots);
@@ -543,7 +594,7 @@ impl CandidateSelector {
                 let mut sc = Vec::with_capacity(top_k);
                 let mut su = Vec::with_capacity(top_k);
                 for (&id, &v) in ids_h[s].iter().zip(vals_h[s].iter()) {
-                    if v.is_finite() {
+                    if id != u32::MAX && v.is_finite() {
                         sc.push(id);
                         su.push(v);
                     } else {
@@ -687,22 +738,40 @@ impl CandidateSelector {
 /// One DFlash 2 decoder layer: a Qwen3 layer whose attention keys/values come from
 /// `[fused_context ‖ block]`, with a two-tap conv wrapped around each sublayer.
 struct DFlash2Layer {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
+    qkv_proj: Linear,
+    kv_proj: Linear,
     o_proj: Linear,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
-    gate_proj: Linear,
-    up_proj: Linear,
+    gate_up_proj: Linear,
     down_proj: Linear,
     attention_conv: BlockConv,
     mlp_conv: BlockConv,
 }
 
 impl DFlash2Layer {
+    fn from_separate_projs(
+        q_proj: Linear,
+        k_proj: Linear,
+        v_proj: Linear,
+        gate_proj: Linear,
+        up_proj: Linear,
+    ) -> Result<(Linear, Linear, Linear)> {
+        let q_dim = q_proj.weight().dim(0)?;
+        let kv_dim = k_proj.weight().dim(0)?;
+        let qkv_w =
+            Tensor::cat(&[q_proj.weight(), k_proj.weight(), v_proj.weight()], 0)?.contiguous()?;
+        let kv_w = qkv_w.narrow(0, q_dim, 2 * kv_dim)?;
+        let gate_up_w = Tensor::cat(&[gate_proj.weight(), up_proj.weight()], 0)?.contiguous()?;
+        Ok((
+            Linear::new(qkv_w, None),
+            Linear::new(kv_w, None),
+            Linear::new(gate_up_w, None),
+        ))
+    }
+
     fn load(cfg: &DFlash2Config, vb: ShardedVarBuilder, index: usize) -> Result<Self> {
         let h = cfg.hidden_size;
         let hd = cfg.head_dim;
@@ -711,17 +780,23 @@ impl DFlash2Layer {
         let eps = cfg.rms_norm_eps;
 
         let va = vb.pp("self_attn");
+        let q_proj = linear_no_bias(h, q_dim, va.pp("q_proj"))?;
+        let k_proj = linear_no_bias(h, kv_dim, va.pp("k_proj"))?;
+        let v_proj = linear_no_bias(h, kv_dim, va.pp("v_proj"))?;
+        let gate_proj = linear_no_bias(h, cfg.intermediate_size, vb.pp("mlp").pp("gate_proj"))?;
+        let up_proj = linear_no_bias(h, cfg.intermediate_size, vb.pp("mlp").pp("up_proj"))?;
+        let (qkv_proj, kv_proj, gate_up_proj) =
+            Self::from_separate_projs(q_proj, k_proj, v_proj, gate_proj, up_proj)?;
+
         Ok(Self {
-            q_proj: linear_no_bias(h, q_dim, va.pp("q_proj"))?,
-            k_proj: linear_no_bias(h, kv_dim, va.pp("k_proj"))?,
-            v_proj: linear_no_bias(h, kv_dim, va.pp("v_proj"))?,
+            qkv_proj,
+            kv_proj,
             o_proj: linear_no_bias(q_dim, h, va.pp("o_proj"))?,
             q_norm: RmsNorm::new(hd, eps, va.pp("q_norm"))?,
             k_norm: RmsNorm::new(hd, eps, va.pp("k_norm"))?,
             input_layernorm: RmsNorm::new(h, eps, vb.pp("input_layernorm"))?,
             post_attention_layernorm: RmsNorm::new(h, eps, vb.pp("post_attention_layernorm"))?,
-            gate_proj: linear_no_bias(h, cfg.intermediate_size, vb.pp("mlp").pp("gate_proj"))?,
-            up_proj: linear_no_bias(h, cfg.intermediate_size, vb.pp("mlp").pp("up_proj"))?,
+            gate_up_proj,
             down_proj: linear_no_bias(cfg.intermediate_size, h, vb.pp("mlp").pp("down_proj"))?,
             attention_conv: BlockConv::load(
                 cfg,
@@ -782,6 +857,7 @@ pub struct Qwen3DFlash2 {
     dtype: DType,
     ctx_cache: std::sync::Mutex<Option<DFlashContextCache>>,
     mask_cache: std::sync::Mutex<HashMap<(usize, usize, usize, Option<usize>), Tensor>>,
+    mask_embed_cache: std::sync::Mutex<Option<Tensor>>,
 }
 
 impl Qwen3DFlash2 {
@@ -850,6 +926,7 @@ impl Qwen3DFlash2 {
             dtype,
             ctx_cache: std::sync::Mutex::new(None),
             mask_cache: std::sync::Mutex::new(HashMap::new()),
+            mask_embed_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -935,31 +1012,51 @@ impl Qwen3DFlash2 {
         for i in 0..cfg.num_hidden_layers {
             let p = format!("blk.{i}");
             let eps = cfg.rms_norm_eps;
+            let q_proj = gguf_linear(
+                &content,
+                reader,
+                &format!("{p}.attn_q.weight"),
+                &[q_dim, h],
+                device,
+                dtype,
+            )?;
+            let k_proj = gguf_linear(
+                &content,
+                reader,
+                &format!("{p}.attn_k.weight"),
+                &[kv_dim, h],
+                device,
+                dtype,
+            )?;
+            let v_proj = gguf_linear(
+                &content,
+                reader,
+                &format!("{p}.attn_v.weight"),
+                &[kv_dim, h],
+                device,
+                dtype,
+            )?;
+            let gate_proj = gguf_linear(
+                &content,
+                reader,
+                &format!("{p}.ffn_gate.weight"),
+                &[cfg.intermediate_size, h],
+                device,
+                dtype,
+            )?;
+            let up_proj = gguf_linear(
+                &content,
+                reader,
+                &format!("{p}.ffn_up.weight"),
+                &[cfg.intermediate_size, h],
+                device,
+                dtype,
+            )?;
+            let (qkv_proj, kv_proj, gate_up_proj) =
+                DFlash2Layer::from_separate_projs(q_proj, k_proj, v_proj, gate_proj, up_proj)?;
             layers.push(DFlash2Layer {
-                q_proj: gguf_linear(
-                    &content,
-                    reader,
-                    &format!("{p}.attn_q.weight"),
-                    &[q_dim, h],
-                    device,
-                    dtype,
-                )?,
-                k_proj: gguf_linear(
-                    &content,
-                    reader,
-                    &format!("{p}.attn_k.weight"),
-                    &[kv_dim, h],
-                    device,
-                    dtype,
-                )?,
-                v_proj: gguf_linear(
-                    &content,
-                    reader,
-                    &format!("{p}.attn_v.weight"),
-                    &[kv_dim, h],
-                    device,
-                    dtype,
-                )?,
+                qkv_proj,
+                kv_proj,
                 o_proj: gguf_linear(
                     &content,
                     reader,
@@ -1004,22 +1101,7 @@ impl Qwen3DFlash2 {
                     device,
                     dtype,
                 )?,
-                gate_proj: gguf_linear(
-                    &content,
-                    reader,
-                    &format!("{p}.ffn_gate.weight"),
-                    &[cfg.intermediate_size, h],
-                    device,
-                    dtype,
-                )?,
-                up_proj: gguf_linear(
-                    &content,
-                    reader,
-                    &format!("{p}.ffn_up.weight"),
-                    &[cfg.intermediate_size, h],
-                    device,
-                    dtype,
-                )?,
+                gate_up_proj,
                 down_proj: gguf_linear(
                     &content,
                     reader,
@@ -1132,6 +1214,7 @@ impl Qwen3DFlash2 {
             dtype,
             ctx_cache: std::sync::Mutex::new(None),
             mask_cache: std::sync::Mutex::new(HashMap::new()),
+            mask_embed_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -1202,18 +1285,19 @@ impl Qwen3DFlash2 {
             let (cos_ctx, sin_ctx) = self.rope_cos_sin(&pos_t)?;
 
             for (layer_idx, layer) in self.layers.iter().enumerate() {
-                let k_ctx = layer.k_proj.forward(&tctx)?.reshape((c_len, nkv, hd))?;
+                let kv_dim = nkv * hd;
+                let kv_ctx = layer.kv_proj.forward(&tctx)?;
+                let k_ctx = kv_ctx.narrow(1, 0, kv_dim)?.reshape((c_len, nkv, hd))?;
                 let k_ctx =
                     hanzo_nn::ops::rms_norm(&k_ctx.contiguous()?, layer.k_norm.weight(), eps)?;
-                let k_ctx = k_ctx.transpose(0, 1)?.contiguous()?; // [nkv, c_len, hd]
+                let k_ctx = k_ctx.transpose(0, 1)?.contiguous()?;
                 let k_ctx = apply_rope(&k_ctx, &cos_ctx, &sin_ctx)?;
 
-                let v_ctx = layer
-                    .v_proj
-                    .forward(&tctx)?
+                let v_ctx = kv_ctx
+                    .narrow(1, kv_dim, kv_dim)?
                     .reshape((c_len, nkv, hd))?
                     .transpose(0, 1)?
-                    .contiguous()?; // [nkv, c_len, hd]
+                    .contiguous()?;
                 layer_ks[layer_idx].push(k_ctx);
                 layer_vs[layer_idx].push(v_ctx);
             }
@@ -1423,7 +1507,10 @@ impl Qwen3DFlash2 {
         need_logits: bool,
         block_size_override: Option<usize>,
     ) -> Result<(Vec<u32>, Option<Tensor>)> {
-        let prof = std::env::var_os("HANZO_DFLASH_PROFILE").is_some();
+        let prof = crate::engine_env_bool("ENGINE_DFLASH_PROFILE", "HANZO_DFLASH_PROFILE", false)
+            || (std::env::var_os("ENGINE_DFLASH_PROFILE").is_none()
+                && std::env::var_os("HANZO_DFLASH_PROFILE")
+                    .is_some_and(|v| v != "0" && v != "false" && !v.is_empty()));
         let t_total = Instant::now();
         let dev = &self.device;
         let max_bs = self.cfg.block_size();
@@ -1454,15 +1541,27 @@ impl Qwen3DFlash2 {
         let ctx_kv = self.resolve_context_kv(target_hiddens, ctx_start, ctx_end)?;
         let ms_ctx = t0.elapsed().as_secs_f64() * 1e3;
 
-        // 2. Seed the block: [anchor, MASK, MASK, ...], embedded through the target.
-        let mut ids = Vec::with_capacity(bs);
-        ids.push(anchor_token);
-        ids.extend(std::iter::repeat_n(
-            self.cfg.dflash_config.mask_token_id,
-            bs - 1,
-        ));
-        let ids_t = Tensor::from_vec(ids, (1, bs), dev)?;
-        let mut hstate = as_2d(&embed(&ids_t)?)?.to_dtype(self.dtype)?; // [bs, hidden]
+        let mask_row = {
+            let mut guard = self
+                .mask_embed_cache
+                .lock()
+                .map_err(|_| hanzo_ml::Error::msg("dflash mask_embed_cache lock poisoned"))?;
+            if let Some(ref row) = *guard {
+                row.clone()
+            } else {
+                let mask_id =
+                    Tensor::new(&[self.cfg.dflash_config.mask_token_id], dev)?.reshape((1, 1))?;
+                let row = as_2d(&embed(&mask_id)?)?
+                    .to_dtype(self.dtype)?
+                    .contiguous()?;
+                *guard = Some(row.clone());
+                row
+            }
+        };
+        let anchor_id = Tensor::new(&[anchor_token], dev)?.reshape((1, 1))?;
+        let anchor_row = as_2d(&embed(&anchor_id)?)?.to_dtype(self.dtype)?;
+        let mask_rows = mask_row.broadcast_as((bs - 1, self.cfg.hidden_size))?;
+        let mut hstate = Tensor::cat(&[&anchor_row, &mask_rows], 0)?;
 
         // 3. RoPE tables for the draft block positions.
         let draft_pos: Vec<u32> = (0..bs as u32).map(|i| anchor_pos as u32 + i).collect();
@@ -1557,17 +1656,20 @@ impl Qwen3DFlash2 {
                 &sin_draft,
                 mask.as_ref(),
             )?;
-            let attn = layer.attention_conv.finish(&attn, &attention_taps)?;
-            hstate = residual.add(&attn)?;
+            hstate = layer
+                .attention_conv
+                .finish_residual(&attn, &attention_taps, &residual)?;
 
             let residual = hstate;
             let normed = layer.post_attention_layernorm.forward(&residual)?;
             let (normed, mlp_taps) = layer.mlp_conv.prepare(&normed)?;
-            let gate = hanzo_nn::ops::silu(&layer.gate_proj.forward(&normed)?)?;
-            let up = layer.up_proj.forward(&normed)?;
-            let mlp = layer.down_proj.forward(&gate.mul(&up)?)?;
-            let mlp = layer.mlp_conv.finish(&mlp, &mlp_taps)?;
-            hstate = residual.add(&mlp)?;
+            let inter = self.cfg.intermediate_size;
+            let gate_up = layer.gate_up_proj.forward(&normed)?;
+            let gate = gate_up.narrow(1, 0, inter)?;
+            let up = gate_up.narrow(1, inter, inter)?;
+            let act = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+            let mlp = layer.down_proj.forward(&act)?;
+            hstate = layer.mlp_conv.finish_residual(&mlp, &mlp_taps, &residual)?;
         }
         let hstate = self.norm.forward(&hstate)?; // [bs, hidden]
         let ms_layers = t_layers.elapsed().as_secs_f64() * 1e3;
@@ -1636,24 +1738,25 @@ impl Qwen3DFlash2 {
         let nrep = nh / nkv;
         let eps = self.cfg.rms_norm_eps as f32;
 
-        // Query: block only.
-        let q = layer.q_proj.forward(x)?.reshape((bs, nh, hd))?;
+        let q_dim = nh * hd;
+        let kv_dim = nkv * hd;
+        let qkv = layer.qkv_proj.forward(x)?;
+
+        let q = qkv.narrow(1, 0, q_dim)?.reshape((bs, nh, hd))?;
         let q = hanzo_nn::ops::rms_norm(&q.contiguous()?, layer.q_norm.weight(), eps)?;
-        let q = q.transpose(0, 1)?.contiguous()?; // [nh, bs, hd]
+        let q = q.transpose(0, 1)?.contiguous()?;
         let q = apply_rope(&q, cos_draft, sin_draft)?;
 
-        // Keys/values: [cached context segments ‖ block].
-        let k_noise = layer.k_proj.forward(x)?.reshape((bs, nkv, hd))?;
+        let k_noise = qkv.narrow(1, q_dim, kv_dim)?.reshape((bs, nkv, hd))?;
         let k_noise = hanzo_nn::ops::rms_norm(&k_noise.contiguous()?, layer.k_norm.weight(), eps)?;
-        let k_noise = k_noise.transpose(0, 1)?.contiguous()?; // [nkv, bs, hd]
+        let k_noise = k_noise.transpose(0, 1)?.contiguous()?;
         let k_noise = apply_rope(&k_noise, cos_draft, sin_draft)?;
 
-        let v_noise = layer
-            .v_proj
-            .forward(x)?
+        let v_noise = qkv
+            .narrow(1, q_dim + kv_dim, kv_dim)?
             .reshape((bs, nkv, hd))?
             .transpose(0, 1)?
-            .contiguous()?; // [nkv, bs, hd]
+            .contiguous()?;
 
         // GQA-reshaped attention avoids concatenating full K/V context caches and avoids
         // expanding KV heads `nrep`x with `repeat_kv`.
@@ -2089,7 +2192,7 @@ const ADAPTIVE_PROBE_STEPS: usize = 3;
 const ADAPTIVE_CUDA_GRAPH_DISCOUNT: f64 = 0.85;
 
 fn dflash_adaptive_enabled() -> bool {
-    std::env::var("HANZO_DFLASH_ADAPTIVE").ok().as_deref() != Some("0")
+    crate::engine_env_bool("ENGINE_DFLASH_ADAPTIVE", "HANZO_DFLASH_ADAPTIVE", true)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3127,10 +3230,21 @@ mod tests {
                 groups: 1,
             })
         };
+        let q_proj = make_lin(16, 16)?;
+        let k_proj = make_lin(4, 16)?;
+        let v_proj = make_lin(4, 16)?;
+        let gate_proj = make_lin(32, 16)?;
+        let up_proj = make_lin(32, 16)?;
+        let (qkv_proj, kv_proj, gate_up_proj) = DFlash2Layer::from_separate_projs(
+            q_proj.clone(),
+            k_proj.clone(),
+            v_proj.clone(),
+            gate_proj,
+            up_proj,
+        )?;
         let layer = DFlash2Layer {
-            q_proj: make_lin(16, 16)?,
-            k_proj: make_lin(4, 16)?,
-            v_proj: make_lin(4, 16)?,
+            qkv_proj,
+            kv_proj,
             o_proj: make_lin(16, 16)?,
             q_norm: RmsNorm::from_w(Tensor::ones(4, DType::F32, &cuda_dev)?, 1e-6)?,
             k_norm: RmsNorm::from_w(Tensor::ones(4, DType::F32, &cuda_dev)?, 1e-6)?,
@@ -3139,8 +3253,7 @@ mod tests {
                 Tensor::ones(16, DType::F32, &cuda_dev)?,
                 1e-6,
             )?,
-            gate_proj: make_lin(32, 16)?,
-            up_proj: make_lin(32, 16)?,
+            gate_up_proj,
             down_proj: make_lin(16, 32)?,
             attention_conv: make_conv()?,
             mlp_conv: make_conv()?,
@@ -3157,6 +3270,7 @@ mod tests {
             dtype: DType::F32,
             ctx_cache: std::sync::Mutex::new(None),
             mask_cache: std::sync::Mutex::new(HashMap::new()),
+            mask_embed_cache: std::sync::Mutex::new(None),
         };
         let x = Tensor::randn(0f32, 0.3f32, (4, 16), &cuda_dev)?;
         let k_big = Tensor::randn(0f32, 0.3f32, (1, 16, 4), &cuda_dev)?;
@@ -3180,7 +3294,7 @@ mod tests {
         let l = &model.layers[0];
         let q = apply_rope(
             &hanzo_nn::ops::rms_norm(
-                &l.q_proj.forward(&x)?.reshape((4, 4, 4))?.contiguous()?,
+                &q_proj.forward(&x)?.reshape((4, 4, 4))?.contiguous()?,
                 l.q_norm.weight(),
                 1e-6,
             )?
@@ -3191,7 +3305,7 @@ mod tests {
         )?;
         let kn = apply_rope(
             &hanzo_nn::ops::rms_norm(
-                &l.k_proj.forward(&x)?.reshape((4, 1, 4))?.contiguous()?,
+                &k_proj.forward(&x)?.reshape((4, 1, 4))?.contiguous()?,
                 l.k_norm.weight(),
                 1e-6,
             )?
@@ -3200,8 +3314,7 @@ mod tests {
             &cos_d,
             &sin_d,
         )?;
-        let vn = l
-            .v_proj
+        let vn = v_proj
             .forward(&x)?
             .reshape((4, 1, 4))?
             .transpose(0, 1)?
@@ -3321,5 +3434,197 @@ mod tests {
         assert!(gate
             .stand_down_reason(7)
             .is_some_and(|r| r.starts_with("warmup_low_commit(")));
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn dflash2_cuda_block_conv_and_residual_match_cpu() -> Result<()> {
+        let Ok(cuda_dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let cpu = Device::Cpu;
+        let (slots, hidden, kernel, group_size) = (16usize, 256usize, 2usize, 16usize);
+        let groups = hidden / group_size;
+
+        let base_v: Vec<f32> = (0..(2 * kernel * hidden))
+            .map(|i| ((i as f32) * 0.031 - 0.5).sin() * 0.5)
+            .collect();
+        let proj_v: Vec<f32> = (0..(2 * kernel * groups * hidden))
+            .map(|i| ((i as f32) * 0.017 + 0.2).cos() * 0.005)
+            .collect();
+        let x_v: Vec<f32> = (0..(slots * hidden))
+            .map(|i| ((i as f32) * 0.023 - 0.8).sin())
+            .collect();
+        let res_v: Vec<f32> = (0..(slots * hidden))
+            .map(|i| ((i as f32) * 0.011 + 0.4).cos() * 0.7)
+            .collect();
+
+        let cpu_f32 = BlockConv {
+            base_kernel: Tensor::from_vec(base_v.clone(), (2, kernel, hidden), &cpu)?,
+            kernel_projection: Linear::new(
+                Tensor::from_vec(proj_v.clone(), (2 * kernel * groups, hidden), &cpu)?,
+                None,
+            ),
+            kernel_size: kernel,
+            group_size,
+            groups,
+        };
+        let x_cpu_f32 = Tensor::from_vec(x_v.clone(), (slots, hidden), &cpu)?;
+        let res_cpu_f32 = Tensor::from_vec(res_v.clone(), (slots, hidden), &cpu)?;
+        let (pre_ref_f32, taps_ref_f32) = cpu_f32.prepare(&x_cpu_f32)?;
+        let fin_ref_f32 = cpu_f32.finish_residual(&pre_ref_f32, &taps_ref_f32, &res_cpu_f32)?;
+
+        for dt in [DType::F32, DType::F16, DType::BF16] {
+            let kernel_tol = match dt {
+                DType::F32 => 0.0,
+                DType::F16 => 2e-3,
+                DType::BF16 => 2e-2,
+                _ => unreachable!(),
+            };
+            let e2e_tol = match dt {
+                DType::F32 => 1e-4,
+                DType::F16 => 5e-3,
+                DType::BF16 => 4e-2,
+                _ => unreachable!(),
+            };
+            let cuda_conv = BlockConv {
+                base_kernel: Tensor::from_vec(base_v.clone(), (2, kernel, hidden), &cuda_dev)?
+                    .to_dtype(dt)?,
+                kernel_projection: Linear::new(
+                    Tensor::from_vec(proj_v.clone(), (2 * kernel * groups, hidden), &cuda_dev)?
+                        .to_dtype(dt)?,
+                    None,
+                ),
+                kernel_size: kernel,
+                group_size,
+                groups,
+            };
+
+            let x_cuda = Tensor::from_vec(x_v.clone(), (slots, hidden), &cuda_dev)?.to_dtype(dt)?;
+            let res_cuda =
+                Tensor::from_vec(res_v.clone(), (slots, hidden), &cuda_dev)?.to_dtype(dt)?;
+
+            let taps_exact_cuda = taps_ref_f32.to_dtype(dt)?.to_device(&cuda_dev)?;
+            let pre_exact_cuda = cuda_conv.convolve(&x_cuda, &taps_exact_cuda, 0, None)?;
+            let fin_exact_cuda =
+                cuda_conv.convolve(&pre_exact_cuda, &taps_exact_cuda, 1, Some(&res_cuda))?;
+            let pre_exact_diff = (&pre_exact_cuda.to_device(&cpu)?.to_dtype(DType::F32)?
+                - &pre_ref_f32)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let fin_exact_diff = (&fin_exact_cuda.to_device(&cpu)?.to_dtype(DType::F32)?
+                - &fin_ref_f32)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            assert!(
+                pre_exact_diff <= kernel_tol && fin_exact_diff <= kernel_tol,
+                "dflash2_block_conv kernel mismatch dt={dt:?}: pre={pre_exact_diff} fin={fin_exact_diff}"
+            );
+
+            let (pre_cuda, taps_cuda) = cuda_conv.prepare(&x_cuda)?;
+            let fin_cuda = cuda_conv.finish_residual(&pre_cuda, &taps_cuda, &res_cuda)?;
+
+            let pre_diff = (&pre_cuda.to_device(&cpu)?.to_dtype(DType::F32)? - &pre_ref_f32)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let fin_diff = (&fin_cuda.to_device(&cpu)?.to_dtype(DType::F32)? - &fin_ref_f32)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            assert!(
+                pre_diff <= e2e_tol && fin_diff <= e2e_tol,
+                "dflash2_block_conv e2e mismatch dt={dt:?}: pre={pre_diff} fin={fin_diff}"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn dflash2_cuda_topk_and_greedy_walk_match_cpu() -> Result<()> {
+        let Ok(cuda_dev) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let cpu = Device::Cpu;
+        let (rows, vocab, k) = (8usize, 4096usize, 64usize);
+        let mut logits_v: Vec<f32> = (0..(rows * vocab))
+            .map(|i| ((i as f32) * 0.137 - 2.3).sin() * 5.0)
+            .collect();
+        logits_v[5] = 100.0;
+        logits_v[19] = 100.0;
+        logits_v[777] = f32::NAN;
+        logits_v[vocab + 12] = f32::NEG_INFINITY;
+
+        let logits_cuda = Tensor::from_vec(logits_v.clone(), (rows, vocab), &cuda_dev)?;
+        let (vals_cuda, ids_cuda) = crate::cuda::dflash2::dflash2_topk_cuda(&logits_cuda, k)?;
+        let got_vals = vals_cuda.to_vec2::<f32>()?;
+        let got_ids = ids_cuda.to_vec2::<u32>()?;
+        for r in 0..rows {
+            let (want_ids, want_vals) = top_k_of(&logits_v[r * vocab..(r + 1) * vocab], k);
+            assert_eq!(got_ids[r], want_ids, "topk ids mismatch at row {r}");
+            for j in 0..k {
+                assert!(
+                    (got_vals[r][j] - want_vals[j]).abs() < 1e-6,
+                    "topk val mismatch at ({r}, {j})"
+                );
+            }
+        }
+
+        let (slots, hidden, rank, top_k) = (15usize, 64usize, 128usize, 32usize);
+        let w_h: Vec<f32> = (0..(rank * hidden))
+            .map(|i| ((i as f32) * 0.029).sin() * 0.2)
+            .collect();
+        let pred_v: Vec<f32> = (0..(vocab * rank))
+            .map(|i| ((i as f32) * 0.017 - 0.3).cos() * 0.3)
+            .collect();
+        let succ_v: Vec<f32> = (0..(vocab * rank))
+            .map(|i| ((i as f32) * 0.023 + 0.1).sin() * 0.3)
+            .collect();
+        let hid_v: Vec<f32> = (0..(slots * hidden))
+            .map(|i| ((i as f32) * 0.041).cos())
+            .collect();
+        let walk_logits_v: Vec<f32> = (0..(slots * vocab))
+            .map(|i| ((i as f32) * 0.071 - 1.1).sin() * 2.0)
+            .collect();
+
+        let sel_cpu = CandidateSelector {
+            hidden_projection: Linear::new(
+                Tensor::from_vec(w_h.clone(), (rank, hidden), &cpu)?,
+                None,
+            ),
+            predecessor_codebook: Tensor::from_vec(pred_v.clone(), (vocab, rank), &cpu)?,
+            successor_codebook: Tensor::from_vec(succ_v.clone(), (vocab, rank), &cpu)?,
+            top_k,
+        };
+        let sel_cuda = CandidateSelector {
+            hidden_projection: Linear::new(Tensor::from_vec(w_h, (rank, hidden), &cuda_dev)?, None),
+            predecessor_codebook: Tensor::from_vec(pred_v, (vocab, rank), &cuda_dev)?,
+            successor_codebook: Tensor::from_vec(succ_v, (vocab, rank), &cuda_dev)?,
+            top_k,
+        };
+
+        let (want_toks, _) = sel_cpu.walk_inner(
+            &Tensor::from_vec(hid_v.clone(), (slots, hidden), &cpu)?,
+            &Tensor::from_vec(walk_logits_v.clone(), (slots, vocab), &cpu)?,
+            42,
+            0.0,
+            false,
+        )?;
+        let (got_toks, got_logits) = sel_cuda.walk_inner(
+            &Tensor::from_vec(hid_v, (slots, hidden), &cuda_dev)?,
+            &Tensor::from_vec(walk_logits_v, (slots, vocab), &cuda_dev)?,
+            42,
+            0.0,
+            false,
+        )?;
+        assert!(got_logits.is_none());
+        assert_eq!(
+            got_toks, want_toks,
+            "CUDA greedy walk tokens mismatch vs CPU"
+        );
+        Ok(())
     }
 }

@@ -551,7 +551,7 @@ pub fn causal_conv1d_cuda(
 pub fn fused_gdn_gating_cuda(
     b: &Tensor,
     a: &Tensor,
-    a_log: &Tensor,
+    neg_exp_a: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
     use core::ffi::c_void;
@@ -562,12 +562,12 @@ pub fn fused_gdn_gating_cuda(
     >(
         b: &Tensor,
         a: &Tensor,
-        a_log: &Tensor,
+        neg_exp_a: &Tensor,
         dt_bias: &Tensor,
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor)> {
         let total_elements = b.elem_count();
-        let num_heads = a_log.elem_count();
+        let num_heads = neg_exp_a.elem_count();
         let shape = b.shape().clone();
         let dev = b.device().as_cuda_device()?;
 
@@ -585,12 +585,12 @@ pub fn fused_gdn_gating_cuda(
         };
         let a_offset = a_l.start_offset();
 
-        let (alog_s, alog_l) = a_log.storage_and_layout();
-        let alog_s = match &*alog_s {
+        let (nea_s, nea_l) = neg_exp_a.storage_and_layout();
+        let nea_s = match &*nea_s {
             hanzo_ml::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => hanzo_ml::bail!("a_log must be a cuda tensor"),
+            _ => hanzo_ml::bail!("neg_exp_a must be a cuda tensor"),
         };
-        let alog_offset = alog_l.start_offset();
+        let nea_offset = nea_l.start_offset();
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
@@ -608,7 +608,7 @@ pub fn fused_gdn_gating_cuda(
             crate::cuda::ffi::fused_gdn_gating(
                 b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
                 a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
-                alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
+                nea_s.slice(nea_offset..).device_ptr(nea_s.stream()).0 as *const f32,
                 dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
                 beta_buf.device_ptr(beta_buf.stream()).0 as *mut c_void,
                 g_buf.device_ptr(g_buf.stream()).0 as *mut c_void,
@@ -629,10 +629,11 @@ pub fn fused_gdn_gating_cuda(
     }
 
     match b.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(b, a, a_log, dt_bias, 0),
-        DType::BF16 => cuda_fwd::<half::bf16>(b, a, a_log, dt_bias, 1),
+        DType::F16 => cuda_fwd::<half::f16>(b, a, neg_exp_a, dt_bias, 0),
+        DType::BF16 => cuda_fwd::<half::bf16>(b, a, neg_exp_a, dt_bias, 1),
+        DType::F32 => cuda_fwd::<f32>(b, a, neg_exp_a, dt_bias, 2),
         other => hanzo_ml::bail!(
-            "fused_gdn_gating_cuda only supports f16/bf16, got {:?}",
+            "fused_gdn_gating_cuda only supports f16/bf16/f32, got {:?}",
             other
         ),
     }

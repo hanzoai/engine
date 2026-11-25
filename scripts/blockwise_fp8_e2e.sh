@@ -19,13 +19,13 @@
 # auto decode beats scalar;
 # greedy output is identical across 3 runs per backend.
 #
-# Inputs: HANZO_ENGINE_BIN (default <repo>/target/release/hanzo-engine), PORT (default 30000),
+# Inputs: ENGINE_BIN (default <repo>/target/release/hanzo-engine), PORT (default 30000),
 # SNAPSHOT (default the fp8hybrid snapshot below), GATE_M1_SUM_US (required).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(dirname "$HERE")
-BIN=${HANZO_ENGINE_BIN:-$REPO/target/release/hanzo-engine}
+BIN=${ENGINE_BIN:-${HANZO_ENGINE_BIN:-$REPO/target/release/hanzo-engine}}
 PORT=${PORT:-30000}
 SNAPSHOT=${SNAPSHOT:-$HOME/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47-fp8hybrid}
 URL=http://127.0.0.1:$PORT/v1/chat/completions

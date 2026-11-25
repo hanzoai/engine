@@ -129,19 +129,18 @@ impl Default for LsaConfig {
 fn global_lsa_slot() -> &'static RwLock<Option<Arc<LsaConfig>>> {
     static GLOBAL_LSA: OnceLock<RwLock<Option<Arc<LsaConfig>>>> = OnceLock::new();
     GLOBAL_LSA.get_or_init(|| {
-        let env_on = std::env::var("HANZO_LSA")
-            .ok()
-            .is_some_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"));
+        let env_on = crate::engine_env_bool("ENGINE_LSA", "HANZO_LSA", false);
         let initial = if env_on {
             let mut cfg = LsaConfig::zen_27b();
-            if let Ok(ms) = std::env::var("HANZO_LSA_MIN_SEQ_LEN") {
+            if let Ok(ms) = crate::engine_env_var("ENGINE_LSA_MIN_SEQ_LEN", "HANZO_LSA_MIN_SEQ_LEN")
+            {
                 if let Ok(val) = ms.trim().parse::<usize>() {
                     cfg = cfg.with_min_seq_len(val);
                 }
             }
             if let (Ok(tp), Ok(tk)) = (
-                std::env::var("HANZO_LSA_TOP_P"),
-                std::env::var("HANZO_LSA_TOP_K"),
+                crate::engine_env_var("ENGINE_LSA_TOP_P", "HANZO_LSA_TOP_P"),
+                crate::engine_env_var("ENGINE_LSA_TOP_K", "HANZO_LSA_TOP_K"),
             ) {
                 if let (Ok(p), Ok(k)) = (tp.trim().parse::<usize>(), tk.trim().parse::<usize>()) {
                     cfg = cfg.with_budget(p, k);

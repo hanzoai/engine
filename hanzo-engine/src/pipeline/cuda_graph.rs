@@ -744,12 +744,18 @@ mod tests {
             "::capture_with_output_replays_independently_into_distinct_buffers"
         );
         let exact = std::env::args().any(|arg| arg == test_name);
-        if !exact && std::env::var_os("HANZO_CUDA_CAPTURE_ISOLATED").is_none() {
+        if !exact
+            && crate::engine_env_os(
+                "ENGINE_CUDA_CAPTURE_ISOLATED",
+                "HANZO_CUDA_CAPTURE_ISOLATED",
+            )
+            .is_none()
+        {
             let exe = std::env::current_exe().map_err(hanzo_ml::Error::wrap)?;
             let out = std::process::Command::new(exe)
                 .arg("--exact")
                 .arg(test_name)
-                .env("HANZO_CUDA_CAPTURE_ISOLATED", "1")
+                .env("ENGINE_CUDA_CAPTURE_ISOLATED", "1")
                 .output()
                 .map_err(hanzo_ml::Error::wrap)?;
             if !out.status.success() {

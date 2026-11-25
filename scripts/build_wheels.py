@@ -204,10 +204,20 @@ def _detect_nccl() -> bool:
 def _cuda_features() -> list[str]:
     """Features for the CUDA wheel; NCCL is enabled by default when available."""
     features = ["cuda"]
+    no_nccl = (
+        _env_truthy("ENGINE_BUILD_NO_NCCL")
+        if "ENGINE_BUILD_NO_NCCL" in os.environ
+        else _env_truthy("HANZO_BUILD_NO_NCCL")
+    )
+    force_nccl = (
+        _env_truthy("ENGINE_BUILD_NCCL")
+        if "ENGINE_BUILD_NCCL" in os.environ
+        else _env_truthy("HANZO_BUILD_NCCL")
+    )
     if (
         platform.system().lower() == "linux"
-        and not _env_truthy("HANZO_BUILD_NO_NCCL")
-        and (_detect_nccl() or _env_truthy("HANZO_BUILD_NCCL"))
+        and not no_nccl
+        and (_detect_nccl() or force_nccl)
     ):
         features.append("nccl")
     version = _cuda_version()

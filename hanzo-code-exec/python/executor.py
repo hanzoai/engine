@@ -263,9 +263,12 @@ _FORMAT_MIME = {
 }
 
 
-# Max size of a declared output file we'll read into memory. Larger files become an error placeholder. Override via HANZO_MAX_OUTPUT_BYTES.
+# Max size of a declared output file we'll read into memory. Larger files become an error placeholder. Override via ENGINE_MAX_OUTPUT_BYTES.
 MAX_OUTPUT_BYTES = int(
-    os.environ.get("HANZO_MAX_OUTPUT_BYTES", str(256 * 1024 * 1024))
+    os.environ.get(
+        "ENGINE_MAX_OUTPUT_BYTES",
+        os.environ.get("HANZO_MAX_OUTPUT_BYTES", str(256 * 1024 * 1024)),
+    )
 )
 
 

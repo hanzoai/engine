@@ -312,14 +312,82 @@ pub const fn using_flash_attn() -> bool {
 /// models stay eager -- they forward_attn without FlashParams and flash corrupts their prefill --
 /// gated at CausalMaskConfig::gguf, not here. Flash flips behavior at MANY sites (mask construction,
 /// paged attention, input processors, run_attention), so one predicate gates them consistently;
-/// `FLASH_PREFILL=0` forces eager everywhere. Read once, cached.
+/// `ENGINE_FLASH_PREFILL=0` (or `FLASH_PREFILL=0`) forces eager everywhere. Read once, cached.
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
 pub fn using_flash_attn() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("FLASH_PREFILL")
+        engine_env_var("ENGINE_FLASH_PREFILL", "FLASH_PREFILL")
+            .or_else(|_| std::env::var("HANZO_FLASH_PREFILL"))
             .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
             .unwrap_or(true)
     })
+}
+
+// Read canonical `ENGINE_*` env var first; fall back to `legacy_name` only when `ENGINE_*` is unset.
+pub fn engine_env_var(engine_name: &str, legacy_name: &str) -> Result<String, std::env::VarError> {
+    match std::env::var(engine_name) {
+        Err(std::env::VarError::NotPresent) => std::env::var(legacy_name),
+        res => res,
+    }
+}
+
+// Read canonical `ENGINE_*` OsString env var first; fall back to `legacy_name` only when `ENGINE_*` is unset.
+pub fn engine_env_os(engine_name: &str, legacy_name: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(engine_name).or_else(|| std::env::var_os(legacy_name))
+}
+
+// Parse a boolean env var checking `ENGINE_*` first and falling back to `legacy_name` when `ENGINE_*` is unset.
+pub fn engine_env_bool(engine_name: &str, legacy_name: &str, default: bool) -> bool {
+    let raw = match std::env::var(engine_name) {
+        Ok(v) => Some(v),
+        Err(std::env::VarError::NotPresent) => std::env::var(legacy_name).ok(),
+        Err(_) => return default,
+    };
+    match raw.as_deref().map(str::trim) {
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
+        Some("0" | "false" | "FALSE" | "no" | "NO" | "off" | "OFF" | "legacy" | "LEGACY") => false,
+        _ => default,
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::{engine_env_bool, engine_env_os, engine_env_var};
+    use std::sync::Mutex;
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn engine_prefix_takes_precedence_over_legacy_hanzo() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let eng = "ENGINE_TEST_ENV_PRECEDENCE";
+        let leg = "HANZO_TEST_ENV_PRECEDENCE";
+        std::env::remove_var(eng);
+        std::env::remove_var(leg);
+
+        assert_eq!(
+            engine_env_var(eng, leg),
+            Err(std::env::VarError::NotPresent)
+        );
+        assert_eq!(engine_env_os(eng, leg), None);
+        assert!(engine_env_bool(eng, leg, true));
+        assert!(!engine_env_bool(eng, leg, false));
+
+        std::env::set_var(leg, "0");
+        assert_eq!(engine_env_var(eng, leg).as_deref(), Ok("0"));
+        assert!(!engine_env_bool(eng, leg, true));
+
+        std::env::set_var(eng, "1");
+        assert_eq!(engine_env_var(eng, leg).as_deref(), Ok("1"));
+        assert!(engine_env_bool(eng, leg, false));
+
+        std::env::set_var(eng, "off");
+        std::env::set_var(leg, "1");
+        assert!(!engine_env_bool(eng, leg, true));
+
+        std::env::remove_var(eng);
+        std::env::remove_var(leg);
+    }
 }

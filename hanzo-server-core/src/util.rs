@@ -28,10 +28,7 @@ const MAX_REMOTE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
 /// and it is closed unless the operator opens it, because a server serving
 /// other people is the case that must be safe by default.
 fn local_media_allowed() -> bool {
-    matches!(
-        std::env::var("HANZO_ALLOW_LOCAL_MEDIA").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    )
+    hanzo_engine::engine_env_bool("ENGINE_ALLOW_LOCAL_MEDIA", "HANZO_ALLOW_LOCAL_MEDIA", false)
 }
 
 /// Fetch `url` over http(s) for media, refusing what a server must not fetch on a caller's behalf.
@@ -167,7 +164,7 @@ pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow:
     } else if url.scheme() == "file" {
         if !local_media_allowed() {
             anyhow::bail!(
-                "Refusing to read local media: set HANZO_ALLOW_LOCAL_MEDIA=1 to allow \
+                "Refusing to read local media: set ENGINE_ALLOW_LOCAL_MEDIA=1 to allow \
                  file:// and local paths on this server"
             );
         }
@@ -215,7 +212,7 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
     } else if url.scheme() == "file" {
         if !local_media_allowed() {
             anyhow::bail!(
-                "Refusing to read local media: set HANZO_ALLOW_LOCAL_MEDIA=1 to allow \
+                "Refusing to read local media: set ENGINE_ALLOW_LOCAL_MEDIA=1 to allow \
                  file:// and local paths on this server"
             );
         }
@@ -336,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_image_url() {
-        std::env::set_var("HANZO_ALLOW_LOCAL_MEDIA", "1");
+        std::env::set_var("ENGINE_ALLOW_LOCAL_MEDIA", "1");
 
         // from URL
         let url = "https://rust-lang.org/logos/rust-logo-32x32.png";

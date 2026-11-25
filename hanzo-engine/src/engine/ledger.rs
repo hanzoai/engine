@@ -151,7 +151,7 @@ pub(crate) fn run_id() -> &'static str {
 pub(crate) fn instance_id() -> &'static str {
     static INSTANCE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     INSTANCE_ID.get_or_init(|| {
-        std::env::var("HANZO_INSTANCE_ID")
+        crate::engine_env_var("ENGINE_INSTANCE_ID", "HANZO_INSTANCE_ID")
             .ok()
             .map(|s| s.trim().replace(char::is_whitespace, "_"))
             .filter(|s| !s.is_empty())

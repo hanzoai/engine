@@ -6,14 +6,14 @@
 //! can use ANY loaded zen / zen-embedding model in-process. The engine is built
 //! once (lazy, from env) holding every configured model.
 //!
-//! Config (read on first call): `FFI_MODELS` = `;`-separated list of
-//! `name=kind:source`, where `kind` ∈ {`gguf`,`plain`,`embedding`}:
+//! Config (read on first call): `ENGINE_FFI_MODELS` (or `FFI_MODELS`) = `;`-separated list of
+//! `name=kind:source`, where `kind` in {`gguf`,`plain`,`embedding`}:
 //!   - `gguf:/abs/path/model.gguf`  (causal GGUF; tokenizer from the file's dir
-//!      or `FFI_TOK_DIR` if set)
+//!      or `ENGINE_FFI_TOK_DIR` if set)
 //!   - `plain:<hf-repo-or-dir>`     (causal safetensors)
 //!   - `embedding:<hf-repo-or-dir>` (embedding model; arch auto-detected)
 //! The first entry is the default model. Example:
-//!   `FFI_MODELS="zen-nano=gguf:/tmp/zen5-weights/zen-5-flash.gguf;zen-embed=embedding:/tmp/zen-embedding-0.6B"`
+//!   `ENGINE_FFI_MODELS="zen-nano=gguf:/tmp/zen5-weights/zen-5-flash.gguf;zen-embed=embedding:/tmp/zen-embedding-0.6B"`
 
 #![allow(clippy::doc_lazy_continuation, clippy::doc_overindented_list_items)]
 
@@ -42,9 +42,12 @@ fn ensure_engine() -> Result<(), String> {
         if hanzo_engine::inference_engine_registered() {
             return Ok(());
         }
-        let spec = std::env::var("FFI_MODELS")
-            .map_err(|_| "set FFI_MODELS (name=kind:source;...)".to_string())?;
-        let tok_dir = std::env::var("FFI_TOK_DIR").ok();
+        let spec = hanzo_engine::engine_env_var("ENGINE_FFI_MODELS", "FFI_MODELS")
+            .or_else(|_| std::env::var("HANZO_FFI_MODELS"))
+            .map_err(|_| "set ENGINE_FFI_MODELS (name=kind:source;...)".to_string())?;
+        let tok_dir = hanzo_engine::engine_env_var("ENGINE_FFI_TOK_DIR", "FFI_TOK_DIR")
+            .or_else(|_| std::env::var("HANZO_FFI_TOK_DIR"))
+            .ok();
         let configs = hanzo_engine::parse_model_spec(&spec, tok_dir.as_deref())?;
         let default_id = configs[0].0.clone();
         let mut builder = ServerBuilder::new();
@@ -200,7 +203,9 @@ pub unsafe extern "C" fn hanzo_ffi_load(
 
     // Reuse the one spec format: `name=kind:source` parses to exactly one config.
     let spec = format!("{name}={kind}:{source}");
-    let tok_dir = std::env::var("FFI_TOK_DIR").ok();
+    let tok_dir = hanzo_engine::engine_env_var("ENGINE_FFI_TOK_DIR", "FFI_TOK_DIR")
+        .or_else(|_| std::env::var("HANZO_FFI_TOK_DIR"))
+        .ok();
     let configs = match hanzo_engine::parse_model_spec(&spec, tok_dir.as_deref()) {
         Ok(c) => c,
         Err(_) => return -3,
@@ -372,7 +377,11 @@ pub unsafe extern "C" fn hanzo_ffi_chat(
     sampling.temperature = Some(0.7);
     sampling.top_k = Some(40);
     sampling.top_p = Some(0.9);
-    sampling.max_len = Some(if max_tokens == 0 { 1024 } else { max_tokens as usize });
+    sampling.max_len = Some(if max_tokens == 0 {
+        1024
+    } else {
+        max_tokens as usize
+    });
     let request = RequestMessage::Chat {
         messages: chat,
         enable_thinking: Some(false),
@@ -391,7 +400,11 @@ pub unsafe extern "C" fn hanzo_ffi_chat(
     loop {
         match rx.blocking_recv() {
             Some(Response::Chunk(chunk)) => {
-                if let Some(text) = chunk.choices.first().and_then(|c| c.delta.content.as_deref()) {
+                if let Some(text) = chunk
+                    .choices
+                    .first()
+                    .and_then(|c| c.delta.content.as_deref())
+                {
                     if !text.is_empty() && on_token(text.as_ptr(), text.len(), ctx) != 0 {
                         // Dropping the receiver ends the request on the engine side.
                         break;
@@ -409,7 +422,12 @@ pub unsafe extern "C" fn hanzo_ffi_chat(
                         .to_string(),
                     );
                 }
-                if chunk.choices.first().is_some_and(|c| c.finish_reason.is_some()) && report.is_some() {
+                if chunk
+                    .choices
+                    .first()
+                    .is_some_and(|c| c.finish_reason.is_some())
+                    && report.is_some()
+                {
                     break;
                 }
             }
@@ -456,7 +474,11 @@ pub unsafe extern "C" fn hanzo_ffi_error(out: *mut *mut u8, out_len: *mut usize)
     if out.is_null() || out_len.is_null() {
         return -1;
     }
-    let mut bytes = LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clone().into_bytes();
+    let mut bytes = LAST_ERROR
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .into_bytes();
     bytes.shrink_to_fit();
     *out_len = bytes.len();
     if bytes.is_empty() {

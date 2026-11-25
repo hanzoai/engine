@@ -1787,6 +1787,8 @@ pub(crate) mod tests {
                 hanzo_quant::QuantMethodConfig::Unquantized(hanzo_nn::Linear::new(w.clone(), None)),
             )?))
         };
+        let dt_bias_f32 = dt.to_dtype(DType::F32)?.contiguous()?;
+        let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
         let twin = GatedDeltaNet {
             in_proj: GdnInProj::Split {
                 qkv: block(&qkv, &qkv_s)?,
@@ -1796,7 +1798,9 @@ pub(crate) mod tests {
             },
             conv1d_weight: conv1d,
             dt_bias: dt,
+            dt_bias_f32,
             a_log,
+            neg_exp_a,
             norm: RmsNormGated::from_weight(norm, 1e-6).sigmoid(),
             out_proj: block(&o, &o_s)?,
             num_k_heads: kh,

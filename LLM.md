@@ -587,26 +587,25 @@ the DSL autotune automates the sweep so a hand-picked constant can't be a local 
   eager/graph text path. (Multimodal 3D-MRoPE, if added, would be position-dependent and must stay
   eager per `model_supports_decode_graph`.)
 
-## Environment variables (bare names, one-way; de-brand DONE)
+## Environment variables (`ENGINE_*` for engine, `ML_*` for `hanzo-ml`)
 
-The env-flag convention is BARE names (no `HANZO_` brand prefix). The de-brand is COMPLETE: every runtime
-knob is a bare name and the one-off dev A/B "fallback" toggles are DELETED (production always runs the
-fast path; runtime HW auto-select is kept). One bare name per real knob. Canonical flags in `perf_flags.rs`:
-- `CUDA_GRAPHS`, `ROCM_GRAPHS`, `METAL_GRAPHS`, `FLASHINFER_DECODE`, `FLASH_PREFILL` -- all default ON,
-  set `=0` to force the eager/unfused path. (`HANZO_ROCM_FLASH_ATTN` and its A/B toggle were already
-  deleted; ROCm flash is always-on when applicable.) `FLASH_PREFILL` gates `using_flash_attn()` (CUDA).
-- **De-branded runtime config**: `KV_SPILL_DIR`, `KV_SPILL_BUDGET_MB`, `ISQ_SINGLETHREAD`,
-  `VK_FUSED_QKNORM`, `MXFP4_DP4A`, `MN_LOCAL_WORLD_SIZE`, `NO_NCCL`,
-  `FFI_MODELS`, `FFI_TOK_DIR`, `CUDA_FLASH_BF16`, `METAL_PRECOMPILE`, `ROCM_GFX_ARCH`.
-- **DELETED (one-off dev A/B toggles that forced the OLD/slow path)**: `HANZO_GDN_FUSED_FALLBACK`,
-  `HANZO_ADD_RMSNORM_FALLBACK`, `HANZO_QK_NORM_ROPE_FALLBACK`, `HANZO_NO_MEMPOOL_FIX`, `SAMPLER_TRACE`
-  (plus the ml `HANZO_Q*K_FALLBACK` / `HANZO_MOE_*_FALLBACK` / `HANZO_IQ*_FALLBACK` family). The fused
-  vs unfused decision is now the always-fast path; bit-exact oracle tests force the unfused/scalar leg
-  via test-only programmatic setters (`layers::set_force_unfused_qk_norm_rope`,
-  `hanzo_ml::set_force_scalar_matvec`), never env, never set in production.
-- License gate reads `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` (see `license.rs`);
-  these are product-namespaced identity vars, not perf flags, and stay branded by design -- the ONLY
-  remaining `HANZO_` env names.
+Every runtime knob is scoped by layer so its owner is obvious at a glance:
+- **`ENGINE_*` for Hanzo Engine** (runtime, serving, KV cache, decode graphs, speculative decoding, LSA,
+  quantization, distributed TP, FFI, and router), read via `hanzo_engine::engine_env_var` /
+  `engine_env_bool` with silent fallback to bare or legacy `HANZO_*` names only when `ENGINE_*` is unset:
+  `ENGINE_CUDA_GRAPHS`, `ENGINE_ROCM_GRAPHS`, `ENGINE_METAL_GRAPHS`, `ENGINE_VK_GRAPHS`,
+  `ENGINE_FLASHINFER_DECODE`, `ENGINE_FLASHINFER_PREFILL`, `ENGINE_FLASH_PREFILL`,
+  `ENGINE_HYBRID_KV_ZERO_COPY`, `ENGINE_KV_SPILL_DIR`, `ENGINE_KV_SPILL_BUDGET_MB`,
+  `ENGINE_GDN_PORTABLE`, `ENGINE_LSA`, `ENGINE_LSA_MIN_SEQ_LEN`, `ENGINE_LSA_TOP_P`, `ENGINE_LSA_TOP_K`,
+  `ENGINE_LSA_ADMIN_TOKEN`, `ENGINE_DFLASH_ADAPTIVE`, `ENGINE_DFLASH_PROFILE`, `ENGINE_NO_BF16_QMM`,
+  `ENGINE_ALLOW_LOCAL_MEDIA`, `ENGINE_NANO_ENABLE_TOOLS`, `ENGINE_ROUTER_HEADS`, `ENGINE_ROUTER_FIELD`,
+  `ENGINE_ROUTER_DEBUG`, `ENGINE_INSTANCE_ID`, `ENGINE_NO_NCCL`, `ENGINE_MN_*`, `ENGINE_FFI_*`.
+- **`ML_*` for `hanzo-ml`** (tensor framework, DSL kernel policy, backend switches):
+  `ML_DSL_POLICY`, `ML_{PQ2,PTQ1,GDN,FLASH,FWHT}_IMPL`, `ML_{PQ2,PTQ1,GDN,FLASH}_{DECODE,PREFILL}_IMPL`,
+  `ML_FLASH_SPLIT_KV`, `ML_QK_STATS`, `ML_CUDA_UMA_THRESHOLD`, `ML_CUDA_PROFILE`, `ML_VK_POOL_CAP_GB`.
+- **Cloud auth & KMS license credentials stay `HANZO_*` by design**:
+  `HANZO_API_KEY` (Hanzo Cloud `/v1/research` bearer token) and
+  `HANZO_ENGINE_LICENSE_TOKEN` / `HANZO_ENGINE_LICENSE_FILE` (see `license.rs`).
 
 ## License key
 

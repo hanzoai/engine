@@ -302,6 +302,21 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
     None
 }
 
+fn is_zero_usize(v: &usize) -> bool {
+    *v == 0
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AfqModuleSpec {
+    pub path: String,
+    #[serde(default)]
+    pub block: usize,
+    #[serde(default)]
+    pub embedding: bool,
+    #[serde(default)]
+    pub dtype: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "quant_method", rename_all = "lowercase")]
 pub enum QuantizedConfig {
@@ -320,10 +335,14 @@ pub enum QuantizedConfig {
     Afq {
         bits: usize,
         group_size: usize,
+        #[serde(default, skip_serializing_if = "is_zero_usize")]
+        hadamard_block: usize,
         /// MLX's per-module entries, by module path: its own bits and group size, or left
         /// unquantized.
         #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
         modules: std::collections::HashMap<String, AfqModule>,
+        #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+        hadamard_blocks: std::collections::HashMap<String, usize>,
     },
     MXFP4 {},
     ModelOpt {
@@ -339,7 +358,12 @@ pub enum AfqModule {
     /// `false`: the module stays unquantized. (`true` means the block's defaults.)
     Quantized(bool),
     /// The module's own affine recipe.
-    Recipe { bits: usize, group_size: usize },
+    Recipe {
+        bits: usize,
+        group_size: usize,
+        #[serde(default, skip_serializing_if = "is_zero_usize")]
+        block: usize,
+    },
 }
 
 /// The entry for the module at `prefix` in a per-module recipe keyed by module path: the exact
@@ -364,25 +388,93 @@ impl QuantizedConfig {
             bits,
             group_size,
             modules,
+            ..
         } = self
         else {
             return None;
         };
         match recipe_entry(modules, prefix) {
             Some(AfqModule::Quantized(false)) => None,
-            Some(AfqModule::Recipe { bits, group_size }) => Some((*bits, *group_size)),
+            Some(AfqModule::Recipe {
+                bits, group_size, ..
+            }) => Some((*bits, *group_size)),
             Some(AfqModule::Quantized(true)) | None => Some((*bits, *group_size)),
         }
     }
+
+    pub fn afq_hadamard_block_at(&self, prefix: &str) -> Option<usize> {
+        let QuantizedConfig::Afq {
+            hadamard_block,
+            modules,
+            hadamard_blocks,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        if matches!(
+            recipe_entry(modules, prefix),
+            Some(AfqModule::Quantized(false))
+        ) {
+            return None;
+        }
+        if let Some(&block) = recipe_entry(hadamard_blocks, prefix) {
+            return (block > 0).then_some(block);
+        }
+        if let Some(AfqModule::Recipe { block, .. }) = recipe_entry(modules, prefix) {
+            if *block > 0 {
+                return Some(*block);
+            }
+        }
+        (*hadamard_block > 0).then_some(*hadamard_block)
+    }
+
+    pub fn with_afq_module_specs(&mut self, specs: &[AfqModuleSpec]) {
+        if let QuantizedConfig::Afq {
+            hadamard_blocks, ..
+        } = self
+        {
+            for spec in specs {
+                hadamard_blocks.insert(spec.path.clone(), spec.block);
+            }
+        }
+    }
 }
+
+type AfqParsedRest = (
+    usize,
+    std::collections::HashMap<String, AfqModule>,
+    std::collections::HashMap<String, usize>,
+);
 
 /// MLX's per-module entries among a quantization block's keys: booleans and objects carrying
 /// `bits`. Only the affine mode exists in AFQ.
 fn afq_modules<E: serde::de::Error>(
     rest: std::collections::HashMap<String, serde_json::Value>,
-) -> std::result::Result<std::collections::HashMap<String, AfqModule>, E> {
+) -> std::result::Result<AfqParsedRest, E> {
+    let mut default_block = 0usize;
     let mut modules = std::collections::HashMap::new();
+    let mut hadamard_blocks = std::collections::HashMap::new();
     for (key, value) in rest {
+        if (key == "block" || key == "hadamard_block") && value.is_u64() {
+            default_block = value.as_u64().unwrap_or(0) as usize;
+            continue;
+        }
+        if key == "modules" && value.is_array() {
+            let specs: Vec<AfqModuleSpec> = serde_json::from_value(value).map_err(E::custom)?;
+            for spec in specs {
+                hadamard_blocks.insert(spec.path, spec.block);
+            }
+            continue;
+        }
+        if let serde_json::Value::Object(ref o) = value {
+            if !o.contains_key("bits") {
+                if let Some(b) = o.get("block").and_then(|v| v.as_u64()) {
+                    hadamard_blocks.insert(key, b as usize);
+                }
+                continue;
+            }
+        }
         let mode = match &value {
             serde_json::Value::Bool(_) => None,
             serde_json::Value::Object(o) if o.contains_key("bits") => o.get("mode"),
@@ -399,7 +491,7 @@ fn afq_modules<E: serde::de::Error>(
             modules.insert(key, module);
         }
     }
-    Ok(modules)
+    Ok((default_block, modules, hadamard_blocks))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -464,10 +556,13 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                let (hadamard_block, modules, hadamard_blocks) = afq_modules(raw.rest)?;
                 Ok(QuantizedConfig::Afq {
                     bits,
                     group_size,
-                    modules: afq_modules(raw.rest)?,
+                    hadamard_block,
+                    modules,
+                    hadamard_blocks,
                 })
             }
             Some(m) if m == "mxfp4" => {
@@ -486,10 +581,13 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                let (hadamard_block, modules, hadamard_blocks) = afq_modules(raw.rest)?;
                 Ok(QuantizedConfig::Afq {
                     bits,
                     group_size,
-                    modules: afq_modules(raw.rest)?,
+                    hadamard_block,
+                    modules,
+                    hadamard_blocks,
                 })
             }
             Some(unknown_method) => {
@@ -1024,6 +1122,7 @@ impl TryFrom<GgmlDType> for IsqType {
             | GgmlDType::TQ2_0
             | GgmlDType::NVFP4
             | GgmlDType::Q1_0
+            | GgmlDType::Q2_0
             | GgmlDType::PQ2_0
             | GgmlDType::PTQ1_0
             | GgmlDType::I32 => {
@@ -1211,6 +1310,20 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Used by Metal fused QKV / gate-up paths.
     fn afq_inner(&self) -> Option<crate::afq::AfqInner<'_>> {
         None
+    }
+
+    /// True when this layer can consume a pre-quantized `IqQ8Activation` on CUDA.
+    fn supports_shared_iq_q8(&self) -> bool {
+        false
+    }
+
+    /// Matmul against a shared `IqQ8Activation`, writing `out_dtype`.
+    fn forward_iq_q8_dtype(
+        &self,
+        _q8: &hanzo_ml::quantized::IqQ8Activation,
+        _out_dtype: DType,
+    ) -> Result<Tensor> {
+        hanzo_ml::bail!("{} does not support shared IqQ8Activation", self.name())
     }
 
     /// If a quantized method, return the activation dtype.
@@ -1982,5 +2095,88 @@ mod afq_recipe_tests {
         assert!(serde_json::from_str::<QuantizedConfig>(recipe).is_err());
         let recipe = r#"{"bits": 4, "group_size": 32, "mode": "nvfp4"}"#;
         assert!(serde_json::from_str::<QuantizedConfig>(recipe).is_err());
+    }
+
+    #[test]
+    fn prism_module_specs_resolve_dynamic_hadamard_blocks() {
+        let mut qcfg: QuantizedConfig =
+            serde_json::from_str(r#"{"bits": 2, "group_size": 128, "mode": "affine"}"#).unwrap();
+        let specs = vec![
+            AfqModuleSpec {
+                path: "lm_head".to_string(),
+                block: 1024,
+                embedding: false,
+                dtype: Some("float16".to_string()),
+            },
+            AfqModuleSpec {
+                path: "model.embed_tokens".to_string(),
+                block: 1024,
+                embedding: true,
+                dtype: Some("float16".to_string()),
+            },
+            AfqModuleSpec {
+                path: "model.layers.0.linear_attn.in_proj_qkv".to_string(),
+                block: 4096,
+                embedding: false,
+                dtype: Some("float16".to_string()),
+            },
+        ];
+        qcfg.with_afq_module_specs(&specs);
+        assert_eq!(
+            qcfg.afq_hadamard_block_at("language_model.lm_head"),
+            Some(1024)
+        );
+        assert_eq!(
+            qcfg.afq_hadamard_block_at("language_model.model.embed_tokens"),
+            Some(1024)
+        );
+        assert_eq!(
+            qcfg.afq_hadamard_block_at("language_model.model.layers.0.linear_attn.in_proj_qkv"),
+            Some(4096)
+        );
+        assert_eq!(
+            qcfg.afq_hadamard_block_at("language_model.model.layers.0.linear_attn.in_proj_a"),
+            None
+        );
+
+        let real_paths = [
+            (
+                "/data/models/zen6-source/27B-mlx-meta/config.json",
+                1024usize,
+            ),
+            (
+                "/data/models/hf/hub/models--prism-ml--Ternary-Bonsai-2-9B-mlx-2bit/snapshots/f4e28a59531731c41b6dfac88cf271bd58f0a287/config.json",
+                4096usize,
+            ),
+        ];
+        #[derive(Deserialize)]
+        struct TopCfg {
+            quantization: QuantizedConfig,
+            modules: Vec<AfqModuleSpec>,
+        }
+        for (path, expected_block) in real_paths {
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                let mut parsed: TopCfg = serde_json::from_str(&raw).unwrap();
+                parsed.quantization.with_afq_module_specs(&parsed.modules);
+                assert_eq!(
+                    parsed
+                        .quantization
+                        .afq_hadamard_block_at("language_model.lm_head"),
+                    Some(expected_block)
+                );
+                assert_eq!(
+                    parsed
+                        .quantization
+                        .afq_hadamard_block_at("language_model.model.embed_tokens"),
+                    Some(expected_block)
+                );
+                assert_eq!(
+                    parsed.quantization.afq_hadamard_block_at(
+                        "language_model.model.layers.0.linear_attn.in_proj_qkv"
+                    ),
+                    Some(expected_block)
+                );
+            }
+        }
     }
 }

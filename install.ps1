@@ -200,16 +200,18 @@ function Get-Features {
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
 
-        if ($env:HANZO_INSTALL_NO_NCCL -eq "1") {
-            Write-Info "HANZO_INSTALL_NO_NCCL=1 set - skipping nccl"
+        $noNccl = if ($null -ne $env:ENGINE_INSTALL_NO_NCCL) { $env:ENGINE_INSTALL_NO_NCCL } else { $env:HANZO_INSTALL_NO_NCCL }
+        $forceNccl = if ($null -ne $env:ENGINE_INSTALL_NCCL) { $env:ENGINE_INSTALL_NCCL } else { $env:HANZO_INSTALL_NCCL }
+        if ($noNccl -eq "1") {
+            Write-Info "ENGINE_INSTALL_NO_NCCL=1 set - skipping nccl"
         } elseif (Test-NCCL) {
             $features += "nccl"
             Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
-        } elseif ($env:HANZO_INSTALL_NCCL -eq "1") {
+        } elseif ($forceNccl -eq "1") {
             $features += "nccl"
-            Write-Warn "HANZO_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+            Write-Warn "ENGINE_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
         } else {
-            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set HANZO_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set ENGINE_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
         }
 
         # Check for cuDNN

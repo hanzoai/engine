@@ -1,25 +1,38 @@
 use std::sync::OnceLock;
 
-// Perf toggles resolve on two orthogonal axes -- the optimization (the "concept": GRAPHS, FUSED_ATTN,
-// PREFILL_GRAPHS, ...) and the backend it runs on (CUDA, METAL, ROCM, VK) -- through one precedence,
+// Perf toggles resolve on two orthogonal axes: the optimization (the "concept": GRAPHS, FUSED_ATTN,
+// PREFILL_GRAPHS, ...) and the backend it runs on (CUDA, METAL, ROCM, VK) through one precedence,
 // so a new toggle is one `resolve(...)` line, never another copy of this logic. First hit wins:
 //
-//   1. `<BACKEND>_<CONCEPT>`  e.g. CUDA_GRAPHS / VK_GRAPHS  — one backend, one opt (per-arch A/B)
-//   2. `<CONCEPT>`            e.g. GRAPHS                    — one opt, every backend (the normal knob)
-//   3. `PERF`                 — every opt (safe-mode `PERF=0`, or force-max `PERF=1`)
+//   1. `ENGINE_<BACKEND>_<CONCEPT>` (with fallback to `<BACKEND>_<CONCEPT>` / `HANZO_<BACKEND>_<CONCEPT>`)
+//   2. `ENGINE_<CONCEPT>`           (with fallback to `<CONCEPT>` / `HANZO_<CONCEPT>`)
+//   3. `ENGINE_PERF`                (with fallback to `PERF` / `HANZO_PERF`)
 //   4. autotuned default
-//
-// Bare, backend-scoped names (no brand prefix outside licensing) — the convention CUDA_GRAPHS /
-// METAL_GRAPHS / ROCM_GRAPHS / VK_GRAPHS / VK_FUSED_ATTN already established.
 
-/// Parse a boolean env var. `None` when unset OR unrecognized, so resolution falls through to the next
-/// source rather than a typo silently forcing a value.
-fn env_opt(name: &str) -> Option<bool> {
-    match std::env::var(name).ok()?.as_str() {
+fn parse_bool_str(s: &str) -> Option<bool> {
+    match s.trim() {
         "1" | "true" | "TRUE" | "yes" | "on" => Some(true),
         "0" | "false" | "FALSE" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+/// Parse a boolean env var checking `ENGINE_<name>` first, then bare `<name>`, then `HANZO_<name>`.
+/// `None` when unset or unrecognized, so resolution falls through to the next source.
+fn env_opt(name: &str) -> Option<bool> {
+    let engine_key = format!("ENGINE_{name}");
+    if let Ok(v) = std::env::var(&engine_key) {
+        return parse_bool_str(&v);
+    }
+    if let Ok(v) = std::env::var(name) {
+        if let Some(b) = parse_bool_str(&v) {
+            return Some(b);
+        }
+    }
+    let legacy_key = format!("HANZO_{name}");
+    std::env::var(&legacy_key)
+        .ok()
+        .and_then(|v| parse_bool_str(&v))
 }
 
 /// Resolve one perf toggle: its full `<BACKEND>_<CONCEPT>` name, its bare concept (backend-independent
@@ -149,4 +162,56 @@ pub(crate) fn flashinfer_prefill_enabled() -> bool {
 // (`ContentConfig` reports the latent dims when it is on) -- they must agree, so they read one flag.
 pub(crate) fn mla_absorb_enabled() -> bool {
     *MLA_ABSORB_ENABLED.get_or_init(|| resolve("MLA_ABSORB", None, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve;
+    use std::sync::Mutex;
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn engine_prefix_precedes_bare_and_legacy_hanzo() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let keys = [
+            "ENGINE_TEST_GRAPHS",
+            "TEST_GRAPHS",
+            "HANZO_TEST_GRAPHS",
+            "ENGINE_TEST_CONCEPT",
+            "TEST_CONCEPT",
+            "HANZO_TEST_CONCEPT",
+            "ENGINE_PERF",
+            "PERF",
+            "HANZO_PERF",
+        ];
+        for k in keys {
+            std::env::remove_var(k);
+        }
+
+        assert!(resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), true));
+        assert!(!resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), false));
+
+        std::env::set_var("HANZO_TEST_GRAPHS", "0");
+        assert!(!resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), true));
+
+        std::env::set_var("TEST_GRAPHS", "1");
+        assert!(resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), false));
+
+        std::env::set_var("ENGINE_TEST_GRAPHS", "0");
+        assert!(!resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), true));
+
+        std::env::remove_var("ENGINE_TEST_GRAPHS");
+        std::env::remove_var("TEST_GRAPHS");
+        std::env::remove_var("HANZO_TEST_GRAPHS");
+
+        std::env::set_var("HANZO_TEST_CONCEPT", "1");
+        assert!(resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), false));
+        std::env::set_var("ENGINE_TEST_CONCEPT", "0");
+        assert!(!resolve("TEST_GRAPHS", Some("TEST_CONCEPT"), true));
+
+        for k in keys {
+            std::env::remove_var(k);
+        }
+    }
 }

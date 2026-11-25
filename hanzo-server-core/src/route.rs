@@ -273,25 +273,28 @@ fn classify_route_with(
     (model, task, route.confidence as f64, features)
 }
 
-/// The single [`Policy`] this deployment serves, resolved once. `ROUTER_HEADS=<serve
-/// bundle>` mounts the learned head onto the router `Policy` ([`Policy::load_heads`]);
-/// unset (or unreadable) leaves the preference-aware rule-based [`prefer`] policy.
-/// Exactly one `Policy` type reaches the seam; the learned path is opt-in and
-/// reversible by one env var, so shipping a head cannot regress the default.
+/// The single [`Policy`] this deployment serves, resolved once. `ENGINE_ROUTER_HEADS=<serve
+/// bundle>` (or `ROUTER_HEADS`) mounts the learned head onto the router `Policy`
+/// ([`Policy::load_heads`]); unset (or unreadable) leaves the preference-aware rule-based
+/// [`prefer`] policy.
 fn deployment_policy() -> &'static Policy {
     static POLICY: OnceLock<Policy> = OnceLock::new();
-    POLICY.get_or_init(|| match std::env::var_os("ROUTER_HEADS") {
-        Some(path) => match Policy::load_heads(std::path::Path::new(&path)) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "ROUTER_HEADS {:?} unreadable ({e}); using rule-based router",
-                    path
-                );
-                prefer()
-            }
-        },
-        None => prefer(),
+    POLICY.get_or_init(|| {
+        let heads = hanzo_engine::engine_env_os("ENGINE_ROUTER_HEADS", "ROUTER_HEADS")
+            .or_else(|| std::env::var_os("HANZO_ROUTER_HEADS"));
+        match heads {
+            Some(path) => match Policy::load_heads(std::path::Path::new(&path)) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        "ENGINE_ROUTER_HEADS {:?} unreadable ({e}); using rule-based router",
+                        path
+                    );
+                    prefer()
+                }
+            },
+            None => prefer(),
+        }
     })
 }
 

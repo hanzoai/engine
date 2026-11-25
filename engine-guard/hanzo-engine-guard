@@ -34,7 +34,12 @@ except Exception:  # pragma: no cover
 APP = "hanzo-engine-guard"
 LABEL = "ai.hanzo.engine-guard"           # launchd label / windows task name base
 CYCLE = 5
-RUNAWAY_CEILING = int(os.environ.get("HANZO_ENGINE_RUNAWAY_CEILING", "256"))
+RUNAWAY_CEILING = int(
+    os.environ.get(
+        "ENGINE_RUNAWAY_CEILING",
+        os.environ.get("HANZO_ENGINE_RUNAWAY_CEILING", "256"),
+    )
+)
 BACKOFF = [15, 30, 60, 120, 300]
 MAX_FAILS = 8
 ENGINE_PAT = "release/hanzo serve"        # native engine; never matches BOMB_PAT

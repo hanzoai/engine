@@ -75,9 +75,12 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
     #[cfg(all(feature = "cuda", feature = "nccl"))]
     {
         // In case we have manual set of TP size
-        if let Ok(x) = std::env::var("MN_LOCAL_WORLD_SIZE") {
+        let local_ws = std::env::var("ENGINE_MN_LOCAL_WORLD_SIZE")
+            .or_else(|_| std::env::var("MN_LOCAL_WORLD_SIZE"))
+            .or_else(|_| std::env::var("HANZO_MN_LOCAL_WORLD_SIZE"));
+        if let Ok(x) = local_ws {
             use std::str::FromStr;
-            Ok(usize::from_str(&x).expect("Not a number for MN_LOCAL_WORLD_SIZE!"))
+            Ok(usize::from_str(&x).expect("Not a number for ENGINE_MN_LOCAL_WORLD_SIZE!"))
         } else {
             use hanzo_ml::cuda::WrapErr;
             hanzo_ml::cuda::cudarc::driver::result::device::get_count()
@@ -91,8 +94,14 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
 }
 
 pub fn use_nccl() -> bool {
-    (std::env::var("NO_NCCL").is_err() || std::env::var("NO_NCCL").is_ok_and(|x| x != "1"))
-        && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
+    let no_nccl = match std::env::var("ENGINE_NO_NCCL") {
+        Ok(v) => v == "1" || v == "true" || v == "TRUE",
+        Err(std::env::VarError::NotPresent) => std::env::var("NO_NCCL")
+            .or_else(|_| std::env::var("HANZO_NO_NCCL"))
+            .is_ok_and(|x| x == "1" || x == "true" || x == "TRUE"),
+        Err(_) => false,
+    };
+    !no_nccl && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
 }
 
 pub fn use_ring() -> bool {

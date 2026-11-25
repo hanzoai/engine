@@ -43,7 +43,7 @@ set -eu
 #                   ref    -> release-wf runs at `--ref <tag>` (ml publish.yml)
 #   handled-style:  release-> a GitHub Release exists for the tag (engine)
 #                   run    -> a release-wf run exists for the tag ref (ml, crates.io)
-# Overridable via HANZO_SHIM_REPOS (used by the tests to inject a single repo).
+# Overridable via ENGINE_SHIM_REPOS (used by the tests to inject a single repo).
 #
 # ml is supported by the code (handled-style `run`, `--ref` dispatch; see the T7
 # tests) but is OFF by default: ml releases to crates.io, not GitHub Releases, and
@@ -53,9 +53,9 @@ set -eu
 # already-uploaded skip is the publish-side idempotence backstop):
 #   hanzoai/ml|publish.yml|ref|rust-ci.yml|run
 DEFAULT_REPOS='hanzoai/engine|release.yml|input|ci.yml|release'
-REPOS="${HANZO_SHIM_REPOS:-$DEFAULT_REPOS}"
+REPOS="${ENGINE_SHIM_REPOS:-${HANZO_SHIM_REPOS:-$DEFAULT_REPOS}}"
 
-STATE_DIR="${HANZO_SHIM_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/hanzo-release-shim}"
+STATE_DIR="${ENGINE_SHIM_STATE:-${HANZO_SHIM_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/hanzo-release-shim}}"
 TAG_GLOB='^v[0-9]'   # vX.Y.Z scheme; ml's `ml-v*` tags are intentionally ignored
 DRY_RUN=0
 ONLY_REPO=''
@@ -164,6 +164,6 @@ main() {
   done
 }
 
-# Sourced by shim_test.sh with HANZO_SHIM_LIB=1 to exercise the functions in
+# Sourced by shim_test.sh with ENGINE_SHIM_LIB=1 to exercise the functions in
 # isolation; run directly otherwise.
-[ "${HANZO_SHIM_LIB:-0}" = 1 ] || main "$@"
+[ "${ENGINE_SHIM_LIB:-${HANZO_SHIM_LIB:-0}}" = 1 ] || main "$@"

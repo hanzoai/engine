@@ -102,13 +102,14 @@ impl Drop for Admission {
     }
 }
 
-/// Diagnostics mode (`HANZO_ROUTER_DEBUG=1`): a per-request admission record,
+/// Diagnostics mode (`ENGINE_ROUTER_DEBUG=1`): a per-request admission record,
 /// full request body dumps, and per-rid timing lines. Off by default.
 fn debug_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        std::env::var_os("HANZO_ROUTER_DEBUG")
-            .is_some_and(|v| v != "0" && v != "false" && !v.is_empty())
+        let v = std::env::var_os("ENGINE_ROUTER_DEBUG")
+            .or_else(|| std::env::var_os("HANZO_ROUTER_DEBUG"));
+        v.is_some_and(|v| v != "0" && v != "false" && !v.is_empty())
     })
 }
 

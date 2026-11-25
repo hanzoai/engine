@@ -62,14 +62,32 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `NO_NCCL` | `NO_NCCL=1` disables NCCL. Falls back to the ring backend. |
-| `MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
-| `MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
-| `MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
-| `MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
-| `MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
-| `MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
+| `ENGINE_NO_NCCL` | `ENGINE_NO_NCCL=1` disables NCCL. Falls back to the ring backend (`NO_NCCL` also accepted). |
+| `ENGINE_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
+| `ENGINE_MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
+| `ENGINE_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
+| `ENGINE_MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
+| `ENGINE_MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
+| `ENGINE_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
 | `RING_CONFIG` | Path to the ring backend JSON config. Presence of this variable enables the ring backend when built with the `ring` feature. |
+
+## Engine runtime, KV cache, LSA, speculative, and router
+
+| Variable | Purpose |
+|---|---|
+| `ENGINE_CUDA_GRAPHS` / `ENGINE_ROCM_GRAPHS` / `ENGINE_METAL_GRAPHS` / `ENGINE_VK_GRAPHS` | Per-backend decode graph toggle (`=0` forces eager). |
+| `ENGINE_FLASHINFER_DECODE` / `ENGINE_FLASHINFER_PREFILL` | FlashInfer paged decode/prefill toggle (`=0` forces eager). |
+| `ENGINE_FLASH_PREFILL` | CUDA dense flash-attention prefill toggle (`=0` forces eager). |
+| `ENGINE_HYBRID_KV_ZERO_COPY` | Single-sequence zero-copy KV transfer (`=0` or `legacy` forces copy+clamp). |
+| `ENGINE_KV_SPILL_DIR` / `ENGINE_KV_SPILL_BUDGET_MB` | Disk-backed KV prefix spill directory and MB budget. |
+| `ENGINE_LSA` / `ENGINE_LSA_MIN_SEQ_LEN` / `ENGINE_LSA_TOP_P` / `ENGINE_LSA_TOP_K` | Latent Sparse Attention runtime configuration. |
+| `ENGINE_LSA_ADMIN_TOKEN` | Bearer token required for live `/v1/lsa` mutations. |
+| `ENGINE_DFLASH_ADAPTIVE` / `ENGINE_DFLASH_PROFILE` | DFlash speculative block sizing and profiling toggles. |
+| `ENGINE_ALLOW_LOCAL_MEDIA` | `=1` permits `file://` and local server media paths in multimodal requests. |
+| `ENGINE_ROUTER_HEADS` / `ENGINE_ROUTER_FIELD` / `ENGINE_ROUTER_DEBUG` | Router learned-head path, congestion field gamma, and debug tracing. |
+| `ENGINE_INSTANCE_ID` | Instance identifier recorded in ledger telemetry lines. |
+
+ML framework kernel switches (`ML_DSL_POLICY`, `ML_{PQ2,PTQ1,GDN,FLASH,FWHT}_IMPL`, `ML_FLASH_SPLIT_KV`, `ML_QK_STATS`) use the `ML_` prefix in `hanzo-ml`.
 
 See the [multi-machine ring guide](/hanzo/guides/perf/multi-machine-ring/) for use.
 

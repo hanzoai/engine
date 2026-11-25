@@ -62,6 +62,8 @@ pub struct TextConfig {
     pub tie_word_embeddings: bool,
     #[serde(default, alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default)]
+    pub modules: Vec<hanzo_quant::AfqModuleSpec>,
 }
 
 impl TextConfig {
@@ -129,4 +131,24 @@ pub struct Config {
     /// Top-level quantization_config takes precedence
     #[serde(default, alias = "quantization")]
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default)]
+    pub modules: Vec<hanzo_quant::AfqModuleSpec>,
+}
+
+impl Config {
+    pub fn resolved_text_config(&self) -> TextConfig {
+        let mut text_config = self.text_config.clone();
+        if self.quantization_config.is_some() {
+            text_config.quantization_config = self.quantization_config.clone();
+        }
+        let specs = if !self.modules.is_empty() {
+            &self.modules
+        } else {
+            &text_config.modules
+        };
+        if let Some(ref mut qcfg) = text_config.quantization_config {
+            qcfg.with_afq_module_specs(specs);
+        }
+        text_config
+    }
 }

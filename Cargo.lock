@@ -142,7 +142,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -153,7 +153,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2033,7 +2033,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2333,7 +2333,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3110,7 +3110,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "clap",
@@ -3142,7 +3142,7 @@ checksum = "b9dc246ef72490c348c62b93c06989605dc074e285657501c0aaa02d73c5b408"
 
 [[package]]
 name = "hanzo-audio"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3152,7 +3152,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-bench"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3160,6 +3160,7 @@ dependencies = [
  "cli-table",
  "hanzo-engine",
  "hanzo-ml",
+ "hanzo-research",
  "hanzo-server-core",
  "libc",
  "reqwest 0.13.4",
@@ -3184,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-cli"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "axum",
@@ -3238,7 +3239,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-code-exec"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3256,7 +3257,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-engine"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3384,7 +3385,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-film"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3402,9 +3403,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn"
-version = "0.11.36"
+version = "0.11.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca9f9e51ce2b82a9829e0bdc12ff698c21acafa0c038659fc8b1c6508c2d999e"
+checksum = "0ff0a47331f7ecbf2a22c02c57ed17b7952952da2041e9e97c0c06c2215f2b44"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -3415,9 +3416,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn-build"
-version = "0.11.8"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fce0f62c10d9e7b0abe99ae1fe508b2b344ab7c305b61bef61d326da32df348"
+checksum = "c10ea2a5f69e5dbe92d20062ee608c9ffebffe5117a3c8cb6aa1833e9f891f24"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3427,9 +3428,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-flash-attn-v3"
-version = "0.11.10"
+version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db078bccabe90c880c36942b3f4ac309cf4336a396fbe7be6909db75af6c9387"
+checksum = "1201fe39ce64558611e39ecc5566bb22aec2b013ec6e79ad7d977de1c1a825c7"
 dependencies = [
  "anyhow",
  "half",
@@ -3462,9 +3463,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kernels"
-version = "0.11.43"
+version = "0.11.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9cf7d651611deb2c01a0b0cbb260440fc322fed66fc25906a5dff4f5c032566"
+checksum = "ad87c24b589d8fdab7b702d63cc1620e858ed9a8b016f75742293b75a8f3d713"
 dependencies = [
  "glob",
  "hanzo-bindgen-cuda",
@@ -3472,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-kv-fabric"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "bytes",
  "parking_lot",
@@ -3487,7 +3488,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-llm-mcp"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3509,7 +3510,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-macros"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3519,9 +3520,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-metal-kernels"
-version = "0.11.48"
+version = "0.11.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e578afd2e467808ab082e897a054e5f174afd8f0fc7d01c8549b046c322fb09"
+checksum = "854b23ac42ca98d048bc30499855f89a633b8be8253db3d6a13721b71117aafb"
 dependencies = [
  "block2",
  "half",
@@ -3535,9 +3536,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-ml"
-version = "0.11.123"
+version = "0.11.124"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d94832cc49c66b5ab3b6a621e0887a67802235f9dd7a93f068c60ad066a9e67"
+checksum = "16d346754f6bae26669a3de1f4376284cb70f0018d86005ea05c406b1656dad5"
 dependencies = [
  "accelerate-src",
  "ash",
@@ -3574,9 +3575,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-nn"
-version = "0.11.50"
+version = "0.11.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63af5a1c03a50f5ab90f42aa2b51399c1a4aa73c6a8d8c803a8c5a500bec62da"
+checksum = "d783d50ed8fb82f489e01d4446b9d98b9525dd8411ba19d4f0e4c9070a5586a7"
 dependencies = [
  "accelerate-src",
  "float8",
@@ -3598,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-paged-attn"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "cudaforge",
@@ -3614,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-pyo3"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3640,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-quant"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "byteorder",
  "cuda-async",
@@ -3675,6 +3676,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-research"
+version = "0.2.5"
+source = "git+https://github.com/hanzoai/ml?branch=feat%2Funified-research-protocol#13bb939941da0bba70f2f020c024c59f8972e3de"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "libc",
+ "ryu",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "ureq",
+]
+
+[[package]]
 name = "hanzo-rocm"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3687,9 +3704,9 @@ dependencies = [
 
 [[package]]
 name = "hanzo-rocm-kernels"
-version = "0.11.46"
+version = "0.11.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3350650191fc2c346f853b713da857dd53194429a369af4db836805739c29a7e"
+checksum = "e99c3f5aa31d004ee10e69096049526b4a9b95e3720420b9f6fdeaf60b91bb4f"
 dependencies = [
  "dirs 5.0.1",
  "half",
@@ -3719,7 +3736,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-sandbox"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3735,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3758,7 +3775,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-server-core"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3793,7 +3810,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-tokenizer"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "aho-corasick",
  "parking_lot",
@@ -3810,7 +3827,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-train"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "hanzo-ml",
@@ -3848,7 +3865,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-vision"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "fast_image_resize",
  "hanzo-ml",
@@ -3858,7 +3875,7 @@ dependencies = [
 
 [[package]]
 name = "hanzo-web-chat"
-version = "1.7.108"
+version = "1.7.109"
 dependencies = [
  "anyhow",
  "axum",
@@ -5243,7 +5260,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6058,7 +6075,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6736,7 +6753,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6795,7 +6812,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7426,7 +7443,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7507,7 +7524,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7899,7 +7916,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7938,7 +7955,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9181,7 +9198,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

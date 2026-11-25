@@ -33,6 +33,26 @@
 // Optimized for small M (generation phase)
 // ============================================================================
 
+template <typename T> __device__ __forceinline__ float afq_to_f32(T v) {
+  if constexpr (std::is_same_v<T, float>) {
+    return v;
+  } else if constexpr (std::is_same_v<T, __half>) {
+    return __half2float(v);
+  } else {
+    return __bfloat162float(v);
+  }
+}
+
+template <typename T> __device__ __forceinline__ T afq_from_f32(float v) {
+  if constexpr (std::is_same_v<T, float>) {
+    return v;
+  } else if constexpr (std::is_same_v<T, __half>) {
+    return __float2half(v);
+  } else {
+    return __float2bfloat16(v);
+  }
+}
+
 // QMV kernel for power-of-2 bit widths
 template <typename T, int bits, int group_size>
 __global__ void
@@ -43,74 +63,59 @@ afq_qmv_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
   const int packed_K = K * bits / 32;
   const int groups_per_row = K / group_size;
 
-  // Each warp processes one output element y[m, n]
-  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
+  int64_t warp_id =
+      ((int64_t)blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
   int lane = threadIdx.x % AFQ_WARP_SIZE;
 
-  int total_outputs = M * N;
+  int64_t total_outputs = (int64_t)M * N;
   if (warp_id >= total_outputs)
     return;
 
-  int m = warp_id / N;
-  int n = warp_id % N;
+  int m = (int)(warp_id / N);
+  int n = (int)(warp_id % N);
 
-  const T *x_row = x + m * K;
-  const uint32_t *w_row = w_q + n * packed_K;
-  const T *scales_row = scales + n * groups_per_row;
-  const T *biases_row = biases + n * groups_per_row;
+  const T *x_row = x + (size_t)m * K;
+  const uint32_t *w_row = w_q + (size_t)n * packed_K;
+  const T *scales_row = scales + (size_t)n * groups_per_row;
+  const T *biases_row = biases + (size_t)n * groups_per_row;
 
   float acc = 0.0f;
 
-  // Each lane processes multiple K elements
-  for (int k = lane; k < K; k += AFQ_WARP_SIZE) {
-    // Get quantized weight
-    int packed_idx = k / values_per_u32;
-    int value_idx = k % values_per_u32;
-    uint32_t packed = w_row[packed_idx];
-    uint32_t q = extract_bits<bits>(packed, value_idx);
+  for (int p = lane; p < packed_K; p += AFQ_WARP_SIZE) {
+    uint32_t packed = w_row[p];
+    int base_k = p * values_per_u32;
+    int group_idx = base_k / group_size;
+    float scale = afq_to_f32(scales_row[group_idx]);
+    float bias = afq_to_f32(biases_row[group_idx]);
 
-    // Get scale and bias
-    int group_idx = k / group_size;
-    float scale, bias;
-    if constexpr (std::is_same_v<T, float>) {
-      scale = scales_row[group_idx];
-      bias = biases_row[group_idx];
-    } else if constexpr (std::is_same_v<T, __half>) {
-      scale = __half2float(scales_row[group_idx]);
-      bias = __half2float(biases_row[group_idx]);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      scale = __bfloat162float(scales_row[group_idx]);
-      bias = __bfloat162float(biases_row[group_idx]);
+    if constexpr (sizeof(T) == 2 && values_per_u32 == 16) {
+      if ((((uintptr_t)(x_row + base_k)) & 15u) == 0u) {
+        uint4 v0 = *reinterpret_cast<const uint4 *>(x_row + base_k);
+        uint4 v1 = *reinterpret_cast<const uint4 *>(x_row + base_k + 8);
+        T xv[16];
+        *reinterpret_cast<uint4 *>(xv) = v0;
+        *reinterpret_cast<uint4 *>(xv + 8) = v1;
+#pragma unroll
+        for (int i = 0; i < 16; i++) {
+          uint32_t q = (packed >> (2 * i)) & 3u;
+          acc = fmaf(afq_to_f32(xv[i]), (float)q * scale + bias, acc);
+        }
+        continue;
+      }
     }
 
-    // Dequantize: w = q * scale + bias
-    float w = (float)q * scale + bias;
-
-    // Get input
-    float x_val;
-    if constexpr (std::is_same_v<T, float>) {
-      x_val = x_row[k];
-    } else if constexpr (std::is_same_v<T, __half>) {
-      x_val = __half2float(x_row[k]);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      x_val = __bfloat162float(x_row[k]);
+#pragma unroll
+    for (int i = 0; i < values_per_u32; i++) {
+      uint32_t q = extract_bits<bits>(packed, i);
+      float x_val = afq_to_f32(x_row[base_k + i]);
+      acc = fmaf(x_val, (float)q * scale + bias, acc);
     }
-
-    acc = fmaf(x_val, w, acc);
   }
 
-  // Warp reduce
   acc = warp_reduce_sum(acc);
 
-  // Lane 0 writes result
   if (lane == 0) {
-    if constexpr (std::is_same_v<T, float>) {
-      y[m * N + n] = acc;
-    } else if constexpr (std::is_same_v<T, __half>) {
-      y[m * N + n] = __float2half(acc);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      y[m * N + n] = __float2bfloat16(acc);
-    }
+    y[(size_t)m * N + n] = afq_from_f32<T>(acc);
   }
 }
 
@@ -123,20 +128,21 @@ afq_qmv_3bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
   const int packed_K = (K * 3 + 7) / 8;
   const int groups_per_row = K / group_size;
 
-  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
+  int64_t warp_id =
+      ((int64_t)blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
   int lane = threadIdx.x % AFQ_WARP_SIZE;
 
-  int total_outputs = M * N;
+  int64_t total_outputs = (int64_t)M * N;
   if (warp_id >= total_outputs)
     return;
 
-  int m = warp_id / N;
-  int n = warp_id % N;
+  int m = (int)(warp_id / N);
+  int n = (int)(warp_id % N);
 
-  const T *x_row = x + m * K;
-  const uint8_t *w_row = w_q + n * packed_K;
-  const T *scales_row = scales + n * groups_per_row;
-  const T *biases_row = biases + n * groups_per_row;
+  const T *x_row = x + (size_t)m * K;
+  const uint8_t *w_row = w_q + (size_t)n * packed_K;
+  const T *scales_row = scales + (size_t)n * groups_per_row;
+  const T *biases_row = biases + (size_t)n * groups_per_row;
 
   float acc = 0.0f;
 
@@ -144,28 +150,10 @@ afq_qmv_3bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
     uint32_t q = extract_3bit(w_row, k);
 
     int group_idx = k / group_size;
-    float scale, bias;
-    if constexpr (std::is_same_v<T, float>) {
-      scale = scales_row[group_idx];
-      bias = biases_row[group_idx];
-    } else if constexpr (std::is_same_v<T, __half>) {
-      scale = __half2float(scales_row[group_idx]);
-      bias = __half2float(biases_row[group_idx]);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      scale = __bfloat162float(scales_row[group_idx]);
-      bias = __bfloat162float(biases_row[group_idx]);
-    }
-
+    float scale = afq_to_f32(scales_row[group_idx]);
+    float bias = afq_to_f32(biases_row[group_idx]);
     float w = (float)q * scale + bias;
-
-    float x_val;
-    if constexpr (std::is_same_v<T, float>) {
-      x_val = x_row[k];
-    } else if constexpr (std::is_same_v<T, __half>) {
-      x_val = __half2float(x_row[k]);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      x_val = __bfloat162float(x_row[k]);
-    }
+    float x_val = afq_to_f32(x_row[k]);
 
     acc = fmaf(x_val, w, acc);
   }
@@ -173,13 +161,7 @@ afq_qmv_3bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
   acc = warp_reduce_sum(acc);
 
   if (lane == 0) {
-    if constexpr (std::is_same_v<T, float>) {
-      y[m * N + n] = acc;
-    } else if constexpr (std::is_same_v<T, __half>) {
-      y[m * N + n] = __float2half(acc);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      y[m * N + n] = __float2bfloat16(acc);
-    }
+    y[(size_t)m * N + n] = afq_from_f32<T>(acc);
   }
 }
 
@@ -192,20 +174,21 @@ afq_qmv_6bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
   const int packed_K = (K * 6 + 7) / 8;
   const int groups_per_row = K / group_size;
 
-  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
+  int64_t warp_id =
+      ((int64_t)blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
   int lane = threadIdx.x % AFQ_WARP_SIZE;
 
-  int total_outputs = M * N;
+  int64_t total_outputs = (int64_t)M * N;
   if (warp_id >= total_outputs)
     return;
 
-  int m = warp_id / N;
-  int n = warp_id % N;
+  int m = (int)(warp_id / N);
+  int n = (int)(warp_id % N);
 
-  const T *x_row = x + m * K;
-  const uint8_t *w_row = w_q + n * packed_K;
-  const T *scales_row = scales + n * groups_per_row;
-  const T *biases_row = biases + n * groups_per_row;
+  const T *x_row = x + (size_t)m * K;
+  const uint8_t *w_row = w_q + (size_t)n * packed_K;
+  const T *scales_row = scales + (size_t)n * groups_per_row;
+  const T *biases_row = biases + (size_t)n * groups_per_row;
 
   float acc = 0.0f;
 
@@ -213,28 +196,10 @@ afq_qmv_6bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
     uint32_t q = extract_6bit(w_row, k);
 
     int group_idx = k / group_size;
-    float scale, bias;
-    if constexpr (std::is_same_v<T, float>) {
-      scale = scales_row[group_idx];
-      bias = biases_row[group_idx];
-    } else if constexpr (std::is_same_v<T, __half>) {
-      scale = __half2float(scales_row[group_idx]);
-      bias = __half2float(biases_row[group_idx]);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      scale = __bfloat162float(scales_row[group_idx]);
-      bias = __bfloat162float(biases_row[group_idx]);
-    }
-
+    float scale = afq_to_f32(scales_row[group_idx]);
+    float bias = afq_to_f32(biases_row[group_idx]);
     float w = (float)q * scale + bias;
-
-    float x_val;
-    if constexpr (std::is_same_v<T, float>) {
-      x_val = x_row[k];
-    } else if constexpr (std::is_same_v<T, __half>) {
-      x_val = __half2float(x_row[k]);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      x_val = __bfloat162float(x_row[k]);
-    }
+    float x_val = afq_to_f32(x_row[k]);
 
     acc = fmaf(x_val, w, acc);
   }
@@ -242,13 +207,7 @@ afq_qmv_6bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
   acc = warp_reduce_sum(acc);
 
   if (lane == 0) {
-    if constexpr (std::is_same_v<T, float>) {
-      y[m * N + n] = acc;
-    } else if constexpr (std::is_same_v<T, __half>) {
-      y[m * N + n] = __float2half(acc);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      y[m * N + n] = __float2bfloat16(acc);
-    }
+    y[(size_t)m * N + n] = afq_from_f32<T>(acc);
   }
 }
 
@@ -284,41 +243,24 @@ afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
 
   // Process K dimension in tiles
   for (int bk = 0; bk < K; bk += TILE_K) {
-    // Load x tile
     int m_idx = bm + ty;
     int k_idx = bk + tx;
     if (m_idx < M && k_idx < K) {
-      if constexpr (std::is_same_v<T, float>) {
-        x_tile[ty][tx] = x[m_idx * K + k_idx];
-      } else if constexpr (std::is_same_v<T, __half>) {
-        x_tile[ty][tx] = __half2float(x[m_idx * K + k_idx]);
-      } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-        x_tile[ty][tx] = __bfloat162float(x[m_idx * K + k_idx]);
-      }
+      x_tile[ty][tx] = afq_to_f32(x[(size_t)m_idx * K + k_idx]);
     } else {
       x_tile[ty][tx] = 0.0f;
     }
 
-    // Load and dequantize w tile
     int n_idx = bn + ty;
     if (n_idx < N && k_idx < K) {
       int packed_idx = k_idx / values_per_u32;
       int value_idx = k_idx % values_per_u32;
-      uint32_t packed = w_q[n_idx * packed_K + packed_idx];
+      uint32_t packed = w_q[(size_t)n_idx * packed_K + packed_idx];
       uint32_t q = extract_bits<bits>(packed, value_idx);
 
       int group_idx = k_idx / group_size;
-      float scale, bias;
-      if constexpr (std::is_same_v<T, float>) {
-        scale = scales[n_idx * groups_per_row + group_idx];
-        bias = biases[n_idx * groups_per_row + group_idx];
-      } else if constexpr (std::is_same_v<T, __half>) {
-        scale = __half2float(scales[n_idx * groups_per_row + group_idx]);
-        bias = __half2float(biases[n_idx * groups_per_row + group_idx]);
-      } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-        scale = __bfloat162float(scales[n_idx * groups_per_row + group_idx]);
-        bias = __bfloat162float(biases[n_idx * groups_per_row + group_idx]);
-      }
+      float scale = afq_to_f32(scales[(size_t)n_idx * groups_per_row + group_idx]);
+      float bias = afq_to_f32(biases[(size_t)n_idx * groups_per_row + group_idx]);
 
       w_tile[ty][tx] = (float)q * scale + bias;
     } else {
@@ -327,7 +269,6 @@ afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
 
     __syncthreads();
 
-    // Compute partial dot product
 #pragma unroll
     for (int k = 0; k < TILE_K; k++) {
       acc = fmaf(x_tile[ty][k], w_tile[tx][k], acc);
@@ -336,32 +277,21 @@ afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
     __syncthreads();
   }
 
-  // Write result
   int m_out = bm + ty;
   int n_out = bn + tx;
   if (m_out < M && n_out < N) {
-    if constexpr (std::is_same_v<T, float>) {
-      y[m_out * N + n_out] = acc;
-    } else if constexpr (std::is_same_v<T, __half>) {
-      y[m_out * N + n_out] = __float2half(acc);
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      y[m_out * N + n_out] = __float2bfloat16(acc);
-    }
+    y[(size_t)m_out * N + n_out] = afq_from_f32<T>(acc);
   }
 }
-
-// ============================================================================
-// Extern "C" Launch Functions - QMV
-// ============================================================================
 
 #define DEFINE_QMV_LAUNCHER(bits, gs, dtype, dtype_name)                       \
   extern "C" void afq_qmv_##bits##bit_gs##gs##_##dtype_name(                   \
       const dtype *x, const uint32_t *w_q, const dtype *scales,                \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
-    int total_outputs = M * N;                                                 \
-    int warps_needed = total_outputs;                                          \
-    int threads = warps_needed * AFQ_WARP_SIZE;                                \
-    int blocks = cdiv(threads, QMV_BLOCK_SIZE);                                \
+    constexpr int warps_per_block = QMV_BLOCK_SIZE / AFQ_WARP_SIZE;            \
+    int64_t total_outputs = (int64_t)M * N;                                    \
+    int blocks =                                                               \
+        (int)((total_outputs + warps_per_block - 1) / warps_per_block);        \
     afq_qmv_kernel<dtype, bits, gs>                                            \
         <<<blocks, QMV_BLOCK_SIZE>>>(x, w_q, scales, biases, y, M, N, K);      \
   }
@@ -370,10 +300,10 @@ afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
   extern "C" void afq_qmv_3bit_gs##gs##_##dtype_name(                          \
       const dtype *x, const uint8_t *w_q, const dtype *scales,                 \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
-    int total_outputs = M * N;                                                 \
-    int warps_needed = total_outputs;                                          \
-    int threads = warps_needed * AFQ_WARP_SIZE;                                \
-    int blocks = cdiv(threads, QMV_BLOCK_SIZE);                                \
+    constexpr int warps_per_block = QMV_BLOCK_SIZE / AFQ_WARP_SIZE;            \
+    int64_t total_outputs = (int64_t)M * N;                                    \
+    int blocks =                                                               \
+        (int)((total_outputs + warps_per_block - 1) / warps_per_block);        \
     afq_qmv_3bit_kernel<dtype, gs>                                             \
         <<<blocks, QMV_BLOCK_SIZE>>>(x, w_q, scales, biases, y, M, N, K);      \
   }
@@ -382,10 +312,10 @@ afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
   extern "C" void afq_qmv_6bit_gs##gs##_##dtype_name(                          \
       const dtype *x, const uint8_t *w_q, const dtype *scales,                 \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
-    int total_outputs = M * N;                                                 \
-    int warps_needed = total_outputs;                                          \
-    int threads = warps_needed * AFQ_WARP_SIZE;                                \
-    int blocks = cdiv(threads, QMV_BLOCK_SIZE);                                \
+    constexpr int warps_per_block = QMV_BLOCK_SIZE / AFQ_WARP_SIZE;            \
+    int64_t total_outputs = (int64_t)M * N;                                    \
+    int blocks =                                                               \
+        (int)((total_outputs + warps_per_block - 1) / warps_per_block);        \
     afq_qmv_6bit_kernel<dtype, gs>                                             \
         <<<blocks, QMV_BLOCK_SIZE>>>(x, w_q, scales, biases, y, M, N, K);      \
   }

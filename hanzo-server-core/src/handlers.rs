@@ -266,8 +266,8 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn authorize_lsa_admin(headers: &HeaderMap) -> std::result::Result<(), (StatusCode, Json<Value>)> {
-    let expected = std::env::var("HANZO_LSA_ADMIN_TOKEN")
-        .or_else(|_| std::env::var("HANZO_ADMIN_TOKEN"))
+    let expected = hanzo_engine::engine_env_var("ENGINE_LSA_ADMIN_TOKEN", "HANZO_LSA_ADMIN_TOKEN")
+        .or_else(|_| hanzo_engine::engine_env_var("ENGINE_ADMIN_TOKEN", "HANZO_ADMIN_TOKEN"))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -276,7 +276,7 @@ fn authorize_lsa_admin(headers: &HeaderMap) -> std::result::Result<(), (StatusCo
             StatusCode::FORBIDDEN,
             Json(json!({
                 "error": {
-                    "message": "LSA runtime mutations are disabled unless HANZO_LSA_ADMIN_TOKEN is configured; configure LSA at startup via --lsa",
+                    "message": "LSA runtime mutations are disabled unless ENGINE_LSA_ADMIN_TOKEN is configured; configure LSA at startup via --lsa",
                     "type": "forbidden"
                 }
             })),
@@ -322,9 +322,9 @@ pub async fn get_lsa_config() -> Json<LsaStatusResponse> {
     })
 }
 
-/// POST `/v1/lsa` — enable or update Latent Sparse Attention (D-LSA / N-LSA) live at runtime.
+/// POST `/v1/lsa` - enable or update Latent Sparse Attention (D-LSA / N-LSA) live at runtime.
 ///
-/// Requires admin authorization via `HANZO_LSA_ADMIN_TOKEN` (`Authorization: Bearer <token>`)
+/// Requires admin authorization via `ENGINE_LSA_ADMIN_TOKEN` (`Authorization: Bearer <token>`)
 /// and validates configuration bounds before installation. In-flight sequences pin their
 /// initial configuration until sequence completion.
 pub async fn set_lsa_config(
@@ -351,9 +351,9 @@ pub async fn set_lsa_config(
     }))
 }
 
-/// DELETE `/v1/lsa` — disable Latent Sparse Attention and revert to standard attention.
+/// DELETE `/v1/lsa` - disable Latent Sparse Attention and revert to standard attention.
 ///
-/// Requires admin authorization via `HANZO_LSA_ADMIN_TOKEN` (`Authorization: Bearer <token>`).
+/// Requires admin authorization via `ENGINE_LSA_ADMIN_TOKEN` (`Authorization: Bearer <token>`).
 pub async fn delete_lsa_config(
     headers: HeaderMap,
 ) -> std::result::Result<Json<LsaStatusResponse>, (StatusCode, Json<Value>)> {
@@ -719,12 +719,14 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
 
         hanzo_engine::LsaConfig::clear();
+        std::env::remove_var("ENGINE_LSA_ADMIN_TOKEN");
+        std::env::remove_var("ENGINE_ADMIN_TOKEN");
         std::env::remove_var("HANZO_LSA_ADMIN_TOKEN");
         std::env::remove_var("HANZO_ADMIN_TOKEN");
 
         let valid_cfg = hanzo_engine::LsaConfig::zen_27b();
 
-        // 1. Without HANZO_LSA_ADMIN_TOKEN configured, mutations return 403 Forbidden.
+        // 1. Without ENGINE_LSA_ADMIN_TOKEN configured, mutations return 403 Forbidden.
         let err = set_lsa_config(HeaderMap::new(), Json(valid_cfg.clone()))
             .await
             .expect_err("unconfigured admin token must forbid POST /v1/lsa");
@@ -736,8 +738,10 @@ mod tests {
             .expect_err("unconfigured admin token must forbid DELETE /v1/lsa");
         assert_eq!(err_del.0, StatusCode::FORBIDDEN);
 
-        // 2. With HANZO_LSA_ADMIN_TOKEN set, missing or wrong bearer token returns 401 Unauthorized.
-        std::env::set_var("HANZO_LSA_ADMIN_TOKEN", "test-secret-admin-token");
+        // 2. With ENGINE_LSA_ADMIN_TOKEN set (taking precedence over legacy HANZO_LSA_ADMIN_TOKEN),
+        //    missing or wrong bearer token returns 401 Unauthorized.
+        std::env::set_var("HANZO_LSA_ADMIN_TOKEN", "stale-legacy-token");
+        std::env::set_var("ENGINE_LSA_ADMIN_TOKEN", "test-secret-admin-token");
 
         let err_missing = set_lsa_config(HeaderMap::new(), Json(valid_cfg.clone()))
             .await
@@ -788,6 +792,7 @@ mod tests {
         assert!(!status_off.enabled);
         assert!(hanzo_engine::LsaConfig::global().is_none());
 
+        std::env::remove_var("ENGINE_LSA_ADMIN_TOKEN");
         std::env::remove_var("HANZO_LSA_ADMIN_TOKEN");
     }
 }

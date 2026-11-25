@@ -532,10 +532,13 @@ impl Qwen3_5MoeTextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
+        let (vb_lm, vb_m) = if vb.contains_tensor("language_model.model.embed_tokens.weight")
+            || vb.contains_tensor("language_model.model.embed_tokens.scales")
+        {
+            let lm = vb.pp("language_model");
+            (lm.clone(), lm.pp("model"))
         } else {
-            vb.pp("model").pp("language_model")
+            (vb.clone(), vb.pp("model").pp("language_model"))
         };
 
         let embed_tokens = layers::embedding(
@@ -668,7 +671,7 @@ impl Qwen3_5MoeTextModel {
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_lm.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
             ReplicatedLayer::from_linear(hanzo_nn::Linear::new(
@@ -701,7 +704,7 @@ impl Qwen3_5MoeTextModel {
                     cfg.linear_value_head_dim,
                 ],
                 conv_dtype: vb_m.dtype(),
-                state_dtype: vb_m.dtype(),
+                state_dtype: DType::F32,
             },
         );
 

@@ -1555,8 +1555,9 @@ pub(crate) mod tests {
     #[test]
     #[cfg(feature = "cuda")]
     fn loader_estimate_equals_allocation() -> Result<()> {
-        const ISOLATED_ENV: &str = "HANZO_ZEN6_MEMPOOL_ISOLATED";
-        if std::env::var_os(ISOLATED_ENV).is_none() {
+        const ISOLATED_ENV: &str = "ENGINE_ZEN6_MEMPOOL_ISOLATED";
+        const LEGACY_ISOLATED_ENV: &str = "HANZO_ZEN6_MEMPOOL_ISOLATED";
+        if crate::engine_env_os(ISOLATED_ENV, LEGACY_ISOLATED_ENV).is_none() {
             let exe = std::env::current_exe().map_err(hanzo_ml::Error::msg)?;
             let mod_suffix = module_path!()
                 .split_once("::")

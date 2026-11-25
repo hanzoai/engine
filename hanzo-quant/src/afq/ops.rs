@@ -2429,551 +2429,107 @@ mod cuda_backend {
         let (wq_ptr, _wq_guard) =
             crate::utils::slice_ptr(w_s.as_cuda_slice::<u32>()?, w.layout().start_offset());
 
+        const QMM_MIN_M: usize = 32;
+        let use_qmm = m >= QMM_MIN_M;
+
+        macro_rules! launch_afq_gemm {
+            ($ty:ty, $suffix:ident) => {{
+                let output_buf = unsafe { dev.alloc::<$ty>(m * n)? };
+                let (x_ptr, _x_guard) =
+                    crate::utils::slice_ptr(x_s.as_cuda_slice::<$ty>()?, x.layout().start_offset());
+                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
+                    s_s.as_cuda_slice::<$ty>()?,
+                    scales.layout().start_offset(),
+                );
+                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
+                    b_s.as_cuda_slice::<$ty>()?,
+                    biases.layout().start_offset(),
+                );
+                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
+
+                macro_rules! call_pow2 {
+                    ($b:literal, $gs:literal) => {
+                        paste::paste! {
+                            if use_qmm {
+                                ffi::[<afq_qmm_ $b bit_gs $gs _ $suffix>](
+                                    x_ptr as *const $ty,
+                                    wq_ptr as *const u32,
+                                    s_ptr as *const $ty,
+                                    b_ptr as *const $ty,
+                                    out_ptr as *mut $ty,
+                                    m as i32,
+                                    n as i32,
+                                    k as i32,
+                                )
+                            } else {
+                                ffi::[<afq_qmv_ $b bit_gs $gs _ $suffix>](
+                                    x_ptr as *const $ty,
+                                    wq_ptr as *const u32,
+                                    s_ptr as *const $ty,
+                                    b_ptr as *const $ty,
+                                    out_ptr as *mut $ty,
+                                    m as i32,
+                                    n as i32,
+                                    k as i32,
+                                )
+                            }
+                        }
+                    };
+                }
+
+                macro_rules! call_nonpow2 {
+                    ($b:literal, $gs:literal) => {
+                        paste::paste! {
+                            ffi::[<afq_qmv_ $b bit_gs $gs _ $suffix>](
+                                x_ptr as *const $ty,
+                                wq_ptr as *const u8,
+                                s_ptr as *const $ty,
+                                b_ptr as *const $ty,
+                                out_ptr as *mut $ty,
+                                m as i32,
+                                n as i32,
+                                k as i32,
+                            )
+                        }
+                    };
+                }
+
+                unsafe {
+                    match (bits, group_size) {
+                        (2, 32) => call_pow2!(2, 32),
+                        (2, 64) => call_pow2!(2, 64),
+                        (2, 128) => call_pow2!(2, 128),
+                        (3, 32) => call_nonpow2!(3, 32),
+                        (3, 64) => call_nonpow2!(3, 64),
+                        (3, 128) => call_nonpow2!(3, 128),
+                        (4, 32) => call_pow2!(4, 32),
+                        (4, 64) => call_pow2!(4, 64),
+                        (4, 128) => call_pow2!(4, 128),
+                        (6, 32) => call_nonpow2!(6, 32),
+                        (6, 64) => call_nonpow2!(6, 64),
+                        (6, 128) => call_nonpow2!(6, 128),
+                        (8, 32) => call_pow2!(8, 32),
+                        (8, 64) => call_pow2!(8, 64),
+                        (8, 128) => call_pow2!(8, 128),
+                        _ => hanzo_ml::bail!(
+                            "Unsupported bits/group_size combination: {bits}/{group_size}"
+                        ),
+                    }
+                }
+                drop(out_guard);
+
+                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+                Ok(Tensor::from((
+                    Storage::Cuda(output_storage),
+                    hanzo_ml::Shape::from(out_shape),
+                )))
+            }};
+        }
+
         match x.dtype() {
-            DType::F16 => {
-                let output_buf = unsafe { dev.alloc::<f16>(m * n)? };
-                let (x_ptr, _x_guard) =
-                    crate::utils::slice_ptr(x_s.as_cuda_slice::<f16>()?, x.layout().start_offset());
-                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
-                    s_s.as_cuda_slice::<f16>()?,
-                    scales.layout().start_offset(),
-                );
-                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
-                    b_s.as_cuda_slice::<f16>()?,
-                    biases.layout().start_offset(),
-                );
-                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
-
-                // Use QMV kernel for fused quantized matmul
-                unsafe {
-                    match (bits, group_size) {
-                        (2, 32) => ffi::afq_qmv_2bit_gs32_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (2, 64) => ffi::afq_qmv_2bit_gs64_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (2, 128) => ffi::afq_qmv_2bit_gs128_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 32) => ffi::afq_qmv_3bit_gs32_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 64) => ffi::afq_qmv_3bit_gs64_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 128) => ffi::afq_qmv_3bit_gs128_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 32) => ffi::afq_qmv_4bit_gs32_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 64) => ffi::afq_qmv_4bit_gs64_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 128) => ffi::afq_qmv_4bit_gs128_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 32) => ffi::afq_qmv_6bit_gs32_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 64) => ffi::afq_qmv_6bit_gs64_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 128) => ffi::afq_qmv_6bit_gs128_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 32) => ffi::afq_qmv_8bit_gs32_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 64) => ffi::afq_qmv_8bit_gs64_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 128) => ffi::afq_qmv_8bit_gs128_f16(
-                            x_ptr as *const f16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f16,
-                            b_ptr as *const f16,
-                            out_ptr as *mut f16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        _ => hanzo_ml::bail!(
-                            "Unsupported bits/group_size combination: {bits}/{group_size}"
-                        ),
-                    }
-                }
-                drop(out_guard);
-
-                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-                let output = Tensor::from((
-                    Storage::Cuda(output_storage),
-                    hanzo_ml::Shape::from(out_shape),
-                ));
-                Ok(output)
-            }
-            DType::F32 => {
-                let output_buf = unsafe { dev.alloc::<f32>(m * n)? };
-                let (x_ptr, _x_guard) =
-                    crate::utils::slice_ptr(x_s.as_cuda_slice::<f32>()?, x.layout().start_offset());
-                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
-                    s_s.as_cuda_slice::<f32>()?,
-                    scales.layout().start_offset(),
-                );
-                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
-                    b_s.as_cuda_slice::<f32>()?,
-                    biases.layout().start_offset(),
-                );
-                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
-
-                unsafe {
-                    match (bits, group_size) {
-                        (2, 32) => ffi::afq_qmv_2bit_gs32_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (2, 64) => ffi::afq_qmv_2bit_gs64_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (2, 128) => ffi::afq_qmv_2bit_gs128_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 32) => ffi::afq_qmv_3bit_gs32_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 64) => ffi::afq_qmv_3bit_gs64_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 128) => ffi::afq_qmv_3bit_gs128_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 32) => ffi::afq_qmv_4bit_gs32_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 64) => ffi::afq_qmv_4bit_gs64_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 128) => ffi::afq_qmv_4bit_gs128_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 32) => ffi::afq_qmv_6bit_gs32_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 64) => ffi::afq_qmv_6bit_gs64_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 128) => ffi::afq_qmv_6bit_gs128_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u8,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 32) => ffi::afq_qmv_8bit_gs32_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 64) => ffi::afq_qmv_8bit_gs64_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 128) => ffi::afq_qmv_8bit_gs128_f32(
-                            x_ptr as *const f32,
-                            wq_ptr as *const u32,
-                            s_ptr as *const f32,
-                            b_ptr as *const f32,
-                            out_ptr as *mut f32,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        _ => hanzo_ml::bail!(
-                            "Unsupported bits/group_size combination: {bits}/{group_size}"
-                        ),
-                    }
-                }
-                drop(out_guard);
-
-                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-                let output = Tensor::from((
-                    Storage::Cuda(output_storage),
-                    hanzo_ml::Shape::from(out_shape),
-                ));
-                Ok(output)
-            }
-            DType::BF16 => {
-                let output_buf = unsafe { dev.alloc::<bf16>(m * n)? };
-                let (x_ptr, _x_guard) = crate::utils::slice_ptr(
-                    x_s.as_cuda_slice::<bf16>()?,
-                    x.layout().start_offset(),
-                );
-                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
-                    s_s.as_cuda_slice::<bf16>()?,
-                    scales.layout().start_offset(),
-                );
-                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
-                    b_s.as_cuda_slice::<bf16>()?,
-                    biases.layout().start_offset(),
-                );
-                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
-
-                // Use QMV kernel for fused quantized matmul
-                unsafe {
-                    match (bits, group_size) {
-                        (2, 32) => ffi::afq_qmv_2bit_gs32_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (2, 64) => ffi::afq_qmv_2bit_gs64_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (2, 128) => ffi::afq_qmv_2bit_gs128_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 32) => ffi::afq_qmv_3bit_gs32_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 64) => ffi::afq_qmv_3bit_gs64_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (3, 128) => ffi::afq_qmv_3bit_gs128_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 32) => ffi::afq_qmv_4bit_gs32_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 64) => ffi::afq_qmv_4bit_gs64_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (4, 128) => ffi::afq_qmv_4bit_gs128_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 32) => ffi::afq_qmv_6bit_gs32_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 64) => ffi::afq_qmv_6bit_gs64_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (6, 128) => ffi::afq_qmv_6bit_gs128_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u8,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 32) => ffi::afq_qmv_8bit_gs32_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 64) => ffi::afq_qmv_8bit_gs64_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        (8, 128) => ffi::afq_qmv_8bit_gs128_bf16(
-                            x_ptr as *const bf16,
-                            wq_ptr as *const u32,
-                            s_ptr as *const bf16,
-                            b_ptr as *const bf16,
-                            out_ptr as *mut bf16,
-                            m as i32,
-                            n as i32,
-                            k as i32,
-                        ),
-                        _ => hanzo_ml::bail!(
-                            "Unsupported bits/group_size combination: {bits}/{group_size}"
-                        ),
-                    }
-                }
-                drop(out_guard);
-
-                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-                let output = Tensor::from((
-                    Storage::Cuda(output_storage),
-                    hanzo_ml::Shape::from(out_shape),
-                ));
-                Ok(output)
-            }
+            DType::F16 => launch_afq_gemm!(f16, f16),
+            DType::F32 => launch_afq_gemm!(f32, f32),
+            DType::BF16 => launch_afq_gemm!(bf16, bf16),
             other => hanzo_ml::bail!("Unsupported dtype for AFQ CUDA matmul: {other:?}"),
         }
     }

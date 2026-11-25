@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-/* Load all configured models (HANZO_FFI_MODELS) if needed. 1 = ready, 0 = fail. */
+/* Load all configured models (ENGINE_FFI_MODELS) if needed. 1 = ready, 0 = fail. */
 int32_t hanzo_ffi_ready(void);
 
 /* Text generation on model `model` (NULL/empty = default). On success (0) writes
@@ -30,7 +30,7 @@ int32_t hanzo_ffi_embed(const uint8_t *model, size_t model_len,
 
 /* Load one model into the LIVE engine at runtime, routable immediately by `name`.
  * `kind` in {"gguf","plain","embedding"}; `source` is the same value the startup
- * HANZO_FFI_MODELS spec uses (abs .gguf path, or HF repo / local dir). Engine
+ * ENGINE_FFI_MODELS spec uses (abs .gguf path, or HF repo / local dir). Engine
  * must already be up (hanzo_ffi_ready). Returns 0 on success.
  * Errors: -1 bad args, -2 engine unavailable, -3 load failed (bad spec, missing
  * weights, or name/alias conflict). */

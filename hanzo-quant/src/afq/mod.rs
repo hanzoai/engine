@@ -1,12 +1,11 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
     io::Cursor,
-    sync::{atomic::AtomicUsize, Arc, Mutex, OnceLock},
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use hanzo_ml::{DType, Device, DeviceLocation, Result, Tensor, D};
+use hanzo_ml::{DType, Device, Result, Tensor, D};
 use hanzo_nn::Linear;
 
 use crate::{
@@ -84,28 +83,52 @@ impl TryFrom<u8> for AfqGroupSize {
     }
 }
 
-static HADAMARD_CACHE: OnceLock<Mutex<HashMap<(DeviceLocation, usize), Tensor>>> = OnceLock::new();
+const MAX_CUDA_FWHT_BLOCK: usize = 8192;
 
-fn hadamard_matrix(block: usize, device: &Device) -> Result<Tensor> {
-    if block == 0 || !block.is_power_of_two() {
-        hanzo_ml::bail!("Hadamard block size must be a power of two, got {block}");
-    }
-    let cache = HADAMARD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = (device.location(), block);
-    if let Some(h) = cache.lock().unwrap().get(&key) {
-        return Ok(h.clone());
-    }
+fn cpu_fwht_blocks(
+    data: &mut [f32],
+    width: usize,
+    block: usize,
+    signs: Option<&[f32]>,
+    inverse: bool,
+) {
     let scale = 1.0f32 / (block as f32).sqrt();
-    let mut data = vec![0.0f32; block * block];
-    for i in 0..block {
-        for j in 0..block {
-            let parity = (i & j).count_ones() & 1;
-            data[i * block + j] = if parity == 0 { scale } else { -scale };
+    for row in data.chunks_exact_mut(width) {
+        if !inverse {
+            if let Some(s) = signs {
+                for (v, &sv) in row.iter_mut().zip(s.iter()) {
+                    *v *= sv;
+                }
+            }
+        }
+        for blk in row.chunks_exact_mut(block) {
+            let mut stride = 1usize;
+            while stride < block {
+                let step = stride * 2;
+                let mut base = 0usize;
+                while base < block {
+                    for j in 0..stride {
+                        let a = blk[base + j];
+                        let b = blk[base + j + stride];
+                        blk[base + j] = a + b;
+                        blk[base + j + stride] = a - b;
+                    }
+                    base += step;
+                }
+                stride = step;
+            }
+            for v in blk.iter_mut() {
+                *v *= scale;
+            }
+        }
+        if inverse {
+            if let Some(s) = signs {
+                for (v, &sv) in row.iter_mut().zip(s.iter()) {
+                    *v *= sv;
+                }
+            }
         }
     }
-    let h = Tensor::from_vec(data, (block, block), device)?;
-    cache.lock().unwrap().insert(key, h.clone());
-    Ok(h)
 }
 
 fn fwht_typed(
@@ -115,25 +138,54 @@ fn fwht_typed(
     inverse: bool,
     out_dtype: DType,
 ) -> Result<Tensor> {
+    if block == 0 || !block.is_power_of_two() {
+        hanzo_ml::bail!("Hadamard block size must be a power of two, got {block}");
+    }
     let orig_shape = x.shape().clone();
     let last_dim = x.dim(D::Minus1)?;
-    if last_dim % block != 0 {
+    if last_dim == 0 || !last_dim.is_multiple_of(block) {
         hanzo_ml::bail!("fwht expects last dim ({last_dim}) divisible by block ({block})");
     }
-    let mut y = x.to_dtype(DType::F32)?;
-    if !inverse {
-        y = y.broadcast_mul(signs)?;
+    if (2..=MAX_CUDA_FWHT_BLOCK).contains(&block) {
+        let xin = match x.dtype() {
+            DType::F32 | DType::F16 | DType::BF16 => Cow::Borrowed(x),
+            _ => Cow::Owned(x.to_dtype(DType::F32)?),
+        };
+        let out = hanzo_ml::quantized::hadamard_fwht(xin.as_ref(), Some(signs), block, inverse)?;
+        return if out.dtype() != out_dtype {
+            out.to_dtype(out_dtype)
+        } else {
+            Ok(out)
+        };
     }
-    let h = hadamard_matrix(block, x.device())?;
-    let mut out = y.reshape(((), block))?.matmul(&h)?.reshape(orig_shape)?;
-    if inverse {
-        out = out.broadcast_mul(signs)?;
+    let mut data = x.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+    let signs_vec = signs
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    if signs_vec.len() != last_dim {
+        hanzo_ml::bail!(
+            "fwht sign width ({}) does not match last dim ({last_dim})",
+            signs_vec.len()
+        );
     }
+    cpu_fwht_blocks(&mut data, last_dim, block, Some(&signs_vec), inverse);
+    let out = Tensor::from_vec(data, orig_shape, x.device())?;
     if out.dtype() != out_dtype {
         out.to_dtype(out_dtype)
     } else {
         Ok(out)
     }
+}
+
+#[derive(Clone, Copy)]
+struct AfqLinearSpec {
+    in_dim: usize,
+    out_dim: usize,
+    bits: usize,
+    group_size: usize,
+    hadamard_block: usize,
+    bias: bool,
 }
 
 #[derive(Debug)]
@@ -183,6 +235,16 @@ impl QuantMethod for AfqLayer {
                 group_size,
             } => {
                 let (w_q, scales, biases) = ops::afq_quantize_op(&weight, group_size, bits)?;
+                let mm_dtype = scales.dtype();
+                let bias = bias
+                    .map(|b| {
+                        if b.dtype() == mm_dtype {
+                            Ok(b)
+                        } else {
+                            b.to_dtype(mm_dtype)
+                        }
+                    })
+                    .transpose()?;
 
                 Ok(Self {
                     w_q,
@@ -256,7 +318,11 @@ impl QuantMethod for AfqLayer {
         };
 
         if let Some(ref b) = self.bias {
-            out = out.broadcast_add(&b.to_dtype(out.dtype())?)?;
+            if b.dtype() == out.dtype() {
+                out = out.broadcast_add(b)?;
+            } else {
+                out = out.broadcast_add(&b.to_dtype(out.dtype())?)?;
+            }
         }
         if out.dtype() != orig_dtype {
             out.to_dtype(orig_dtype)
@@ -391,6 +457,10 @@ impl AfqLayer {
         }
     }
 
+    pub fn hadamard_block(&self) -> usize {
+        self.hadamard_block
+    }
+
     pub fn afq_linear_b(
         in_dim: usize,
         out_dim: usize,
@@ -403,8 +473,9 @@ impl AfqLayer {
         }
         // Unquantized fallback when either the per-module recipe excludes this layer or the
         // checkpoint left this module unquantized (e.g., GDN `in_proj_a` / `in_proj_b`).
+        let prefix = vb.prefix();
         let Some((bits, group_size)) = config
-            .afq_at(&vb.prefix())
+            .afq_at(&prefix)
             .filter(|_| vb.contains_tensor("scales"))
         else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
@@ -417,12 +488,46 @@ impl AfqLayer {
                 QuantMethodConfig::Unquantized(Linear::new(weight, bias)),
             )?));
         };
+        let hadamard_block = config.afq_hadamard_block_at(&prefix).unwrap_or(0);
 
-        Ok(Self::afq_linear_typed(
-            in_dim, out_dim, bits, group_size, bias, vb,
+        Ok(Self::load_typed(
+            AfqLinearSpec {
+                in_dim,
+                out_dim,
+                bits,
+                group_size,
+                hadamard_block,
+                bias,
+            },
+            vb,
         )?)
     }
 
+    pub fn afq_embed(
+        vocab_size: usize,
+        hidden_size: usize,
+        config: &QuantizedConfig,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<Self>> {
+        let prefix = vb.prefix();
+        let Some((bits, group_size)) = config.afq_at(&prefix) else {
+            hanzo_ml::bail!("AFQ embedding {} excluded from quantization recipe", prefix);
+        };
+        let hadamard_block = config.afq_hadamard_block_at(&prefix).unwrap_or(0);
+        Self::load_typed(
+            AfqLinearSpec {
+                in_dim: hidden_size,
+                out_dim: vocab_size,
+                bits,
+                group_size,
+                hadamard_block,
+                bias: false,
+            },
+            vb,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn afq_linear_typed(
         in_dim: usize,
         out_dim: usize,
@@ -431,6 +536,28 @@ impl AfqLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<Self>> {
+        Self::load_typed(
+            AfqLinearSpec {
+                in_dim,
+                out_dim,
+                bits,
+                group_size,
+                hadamard_block: 0,
+                bias,
+            },
+            vb,
+        )
+    }
+
+    fn load_typed(spec: AfqLinearSpec, vb: ShardedVarBuilder) -> Result<Arc<Self>> {
+        let AfqLinearSpec {
+            in_dim,
+            out_dim,
+            bits,
+            group_size,
+            hadamard_block,
+            bias,
+        } = spec;
         let w_q = vb.get_with_hints_dtype(
             (out_dim, in_dim * bits / 32),
             "weight",
@@ -442,8 +569,32 @@ impl AfqLayer {
         } else {
             None
         };
-        let hadamard_block = if signs.is_some() { 512 } else { 0 };
-        // Preserve 10-bit F16 mantissa precision on Prism/Bonsai-2 Hadamard checkpoints.
+        if signs.is_some() && hadamard_block == 0 {
+            hanzo_ml::bail!(
+                "AFQ layer {} carries Hadamard signs on disk while hadamard_block is 0",
+                vb.prefix()
+            );
+        }
+        if hadamard_block > 0 {
+            if !hadamard_block.is_power_of_two() {
+                hanzo_ml::bail!(
+                    "AFQ layer {} has non-power-of-two hadamard_block {hadamard_block}",
+                    vb.prefix()
+                );
+            }
+            if !in_dim.is_multiple_of(hadamard_block) {
+                hanzo_ml::bail!(
+                    "AFQ layer {} input dim {in_dim} is not divisible by hadamard_block {hadamard_block}",
+                    vb.prefix()
+                );
+            }
+            if signs.is_none() {
+                hanzo_ml::bail!(
+                    "AFQ layer {} specifies hadamard_block {hadamard_block} without a signs tensor",
+                    vb.prefix()
+                );
+            }
+        }
         let (scales, biases) = if signs.is_some() {
             (
                 vb.get_with_hints_dtype(
@@ -466,8 +617,14 @@ impl AfqLayer {
             )
         };
 
+        let mm_dtype = scales.dtype();
         let bias = if bias {
-            Some(vb.get((out_dim,), "bias")?)
+            let b = vb.get((out_dim,), "bias")?;
+            Some(if b.dtype() == mm_dtype {
+                b
+            } else {
+                b.to_dtype(mm_dtype)?
+            })
         } else {
             None
         };
@@ -701,5 +858,304 @@ impl QuantizedSerde for AfqLayer {
             }),
             b,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::{AfqModuleSpec, ShardedSafeTensors};
+
+    fn dense_sylvester_fwht(
+        x: &[f32],
+        rows: usize,
+        width: usize,
+        block: usize,
+        signs: &[f32],
+        inverse: bool,
+    ) -> Vec<f32> {
+        let scale = 1.0f32 / (block as f32).sqrt();
+        let mut out = vec![0.0f32; rows * width];
+        for r in 0..rows {
+            let src = &x[r * width..(r + 1) * width];
+            let dst = &mut out[r * width..(r + 1) * width];
+            for b0 in (0..width).step_by(block) {
+                for i in 0..block {
+                    let mut sum = 0.0f32;
+                    for j in 0..block {
+                        let v = if inverse {
+                            src[b0 + j]
+                        } else {
+                            src[b0 + j] * signs[b0 + j]
+                        };
+                        let h = if ((i & j).count_ones() & 1) == 0 {
+                            scale
+                        } else {
+                            -scale
+                        };
+                        sum += v * h;
+                    }
+                    dst[b0 + i] = if inverse { sum * signs[b0 + i] } else { sum };
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn fwht_typed_forward_and_inverse_match_sylvester_reference() -> Result<()> {
+        for &block in &[64usize, 1024, 4096] {
+            let width = if block == 64 { 128 } else { block };
+            let rows = 3usize;
+            let x_host: Vec<f32> = (0..(rows * width))
+                .map(|i| ((i as f32) * 0.0137 - 1.7).sin())
+                .collect();
+            let signs_host: Vec<f32> = (0..width)
+                .map(|i| if (i * 7 + 3) % 2 == 0 { 1.0 } else { -1.0 })
+                .collect();
+            let want_fwd = if block <= 1024 {
+                Some(dense_sylvester_fwht(
+                    &x_host,
+                    rows,
+                    width,
+                    block,
+                    &signs_host,
+                    false,
+                ))
+            } else {
+                None
+            };
+
+            let mut devices = vec![Device::Cpu];
+            #[cfg(feature = "cuda")]
+            if let Ok(cuda_dev) = Device::new_cuda(0) {
+                devices.push(cuda_dev);
+            }
+
+            let mut cpu_fwd_out: Option<Vec<f32>> = None;
+            let mut cpu_inv_out: Option<Vec<f32>> = None;
+
+            for dev in &devices {
+                let x = Tensor::from_vec(x_host.clone(), (rows, width), dev)?;
+                let signs = Tensor::from_vec(signs_host.clone(), (width,), dev)?;
+                let fwd = fwht_typed(&x, block, &signs, false, DType::F32)?;
+                let roundtrip = fwht_typed(&fwd, block, &signs, true, DType::F32)?;
+                let fwd_v = fwd.flatten_all()?.to_vec1::<f32>()?;
+                let rt_v = roundtrip.flatten_all()?.to_vec1::<f32>()?;
+
+                if let Some(ref want) = want_fwd {
+                    let max_err = fwd_v
+                        .iter()
+                        .zip(want.iter())
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0f32, f32::max);
+                    assert!(max_err < 1e-4, "fwht block={block} max_err={max_err}");
+                }
+                let rt_err = rt_v
+                    .iter()
+                    .zip(x_host.iter())
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    rt_err < 1e-4,
+                    "fwht roundtrip block={block} rt_err={rt_err}"
+                );
+
+                if dev.is_cpu() {
+                    cpu_fwd_out = Some(fwd_v);
+                    cpu_inv_out = Some(
+                        fwht_typed(&x, block, &signs, true, DType::F32)?
+                            .flatten_all()?
+                            .to_vec1::<f32>()?,
+                    );
+                } else {
+                    let cf = cpu_fwd_out.as_ref().unwrap();
+                    let ci = cpu_inv_out.as_ref().unwrap();
+                    let cuda_inv = fwht_typed(&x, block, &signs, true, DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?;
+                    let fwd_diff = fwd_v
+                        .iter()
+                        .zip(cf.iter())
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0f32, f32::max);
+                    let inv_diff = cuda_inv
+                        .iter()
+                        .zip(ci.iter())
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0f32, f32::max);
+                    assert!(fwd_diff < 1e-4 && inv_diff < 1e-4);
+
+                    for dt in [DType::F16, DType::BF16] {
+                        let x_h = x.to_dtype(dt)?;
+                        let y_h = fwht_typed(&x_h, block, &signs, false, dt)?;
+                        assert_eq!(y_h.dtype(), dt);
+                        let z_h = fwht_typed(&y_h, block, &signs, true, dt)?;
+                        let err = (&z_h.to_dtype(DType::F32)? - &x_h.to_dtype(DType::F32)?)?
+                            .abs()?
+                            .flatten_all()?
+                            .max(0)?
+                            .to_scalar::<f32>()?;
+                        assert!(
+                            err < 3e-2,
+                            "half roundtrip block={block} dt={dt:?} err={err}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn afq_signs_fail_closed_when_hadamard_block_zero_and_succeed_with_spec() -> Result<()> {
+        let mut devices = vec![Device::Cpu];
+        #[cfg(feature = "cuda")]
+        if let Ok(cuda_dev) = Device::new_cuda(0) {
+            devices.push(cuda_dev);
+        }
+
+        for dev in devices {
+            for &block in &[1024usize, 4096] {
+                let in_dim = block;
+                let out_dim = 8usize;
+                let gs = 128usize;
+                let packed_k = in_dim * 2 / 32;
+                let groups = in_dim / gs;
+
+                let w_vals: Vec<u32> = (0..(out_dim * packed_k))
+                    .map(|i| {
+                        0x5555_5555u32 ^ ((i as u32).wrapping_mul(0x0101_0101) & 0xaaaa_aaaau32)
+                    })
+                    .collect();
+                let s_vals: Vec<f32> = (0..(out_dim * groups))
+                    .map(|i| 0.05 + ((i % 7) as f32) * 0.01)
+                    .collect();
+                let b_vals: Vec<f32> = s_vals.iter().map(|s| -s).collect();
+                let sign_vals: Vec<f32> = (0..in_dim)
+                    .map(|i| if i % 3 == 0 { -1.0 } else { 1.0 })
+                    .collect();
+
+                let mut map = HashMap::new();
+                map.insert(
+                    "language_model.lm_head.weight".to_string(),
+                    Tensor::from_vec(w_vals, (out_dim, packed_k), &dev)?,
+                );
+                map.insert(
+                    "language_model.lm_head.scales".to_string(),
+                    Tensor::from_vec(s_vals, (out_dim, groups), &dev)?.to_dtype(DType::F16)?,
+                );
+                map.insert(
+                    "language_model.lm_head.biases".to_string(),
+                    Tensor::from_vec(b_vals, (out_dim, groups), &dev)?.to_dtype(DType::F16)?,
+                );
+                map.insert(
+                    "language_model.lm_head.signs".to_string(),
+                    Tensor::from_vec(sign_vals, (in_dim,), &dev)?,
+                );
+
+                let vb = ShardedSafeTensors::wrap_with_dummy_regexes(
+                    Box::new(map),
+                    DType::F16,
+                    dev.clone(),
+                    None,
+                );
+
+                let missing_block_cfg: QuantizedConfig =
+                    serde_json::from_str(r#"{"bits": 2, "group_size": 128, "mode": "affine"}"#)
+                        .unwrap();
+                assert!(
+                    AfqLayer::afq_linear_b(
+                        in_dim,
+                        out_dim,
+                        &missing_block_cfg,
+                        false,
+                        vb.pp("language_model.lm_head")
+                    )
+                    .is_err(),
+                    "must fail closed when signs exist and hadamard_block is 0"
+                );
+                assert!(AfqLayer::afq_embed(
+                    out_dim,
+                    in_dim,
+                    &missing_block_cfg,
+                    vb.pp("language_model.lm_head")
+                )
+                .is_err());
+                assert!(AfqLayer::afq_linear_typed(
+                    in_dim,
+                    out_dim,
+                    2,
+                    128,
+                    false,
+                    vb.pp("language_model.lm_head")
+                )
+                .is_err());
+
+                let mut cfg = missing_block_cfg;
+                cfg.with_afq_module_specs(&[AfqModuleSpec {
+                    path: "lm_head".to_string(),
+                    block,
+                    embedding: false,
+                    dtype: Some("float16".to_string()),
+                }]);
+                let lin = AfqLayer::afq_linear_b(
+                    in_dim,
+                    out_dim,
+                    &cfg,
+                    false,
+                    vb.pp("language_model.lm_head"),
+                )?;
+                let emb =
+                    AfqLayer::afq_embed(out_dim, in_dim, &cfg, vb.pp("language_model.lm_head"))?;
+                assert_eq!(emb.hadamard_block(), block);
+
+                let w_deq_raw = lin.dequantize_w()?;
+                let w_deq = w_deq_raw.to_dtype(DType::F32)?;
+                let ids = Tensor::from_vec(vec![0u32, 3, 7], (3,), &dev)?;
+                let emb_f16 = emb.embed(&ids, w_deq_raw.dtype())?.to_dtype(DType::F32)?;
+                let ref_rows = w_deq.index_select(&ids, 0)?;
+                let emb_f16_err = (&emb_f16 - &ref_rows)?
+                    .abs()?
+                    .flatten_all()?
+                    .max(0)?
+                    .to_scalar::<f32>()?;
+                assert!(
+                    emb_f16_err < 1e-6,
+                    "embed f16 mismatch block={block} err={emb_f16_err}"
+                );
+                let emb_rows = emb.embed(&ids, DType::F32)?;
+                let emb_err = (&emb_rows - &ref_rows)?
+                    .abs()?
+                    .flatten_all()?
+                    .max(0)?
+                    .to_scalar::<f32>()?;
+                assert!(
+                    emb_err < 2.5e-3,
+                    "embed f32 mismatch block={block} err={emb_err}"
+                );
+
+                for &m in &[4usize, 40] {
+                    let x_vals: Vec<f32> = (0..(m * in_dim))
+                        .map(|i| ((i as f32) * 0.019 - 0.4).cos() * 0.5)
+                        .collect();
+                    let x = Tensor::from_vec(x_vals, (m, in_dim), &dev)?.to_dtype(DType::F16)?;
+                    let y = lin.forward_raw(&x)?.to_dtype(DType::F32)?;
+                    let y_ref = x.to_dtype(DType::F32)?.matmul(&w_deq.t()?)?;
+                    let mm_err = (&y - &y_ref)?
+                        .abs()?
+                        .flatten_all()?
+                        .max(0)?
+                        .to_scalar::<f32>()?;
+                    assert!(
+                        mm_err < 5e-2,
+                        "afq forward mismatch m={m} block={block} dev={dev:?} err={mm_err}"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 }

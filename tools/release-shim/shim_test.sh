@@ -39,7 +39,7 @@ run() {
   desc=$1; shift
   : >"$GH_CALLS"
   STATE="$TMP/state.$pass.$fail"; rm -rf "$STATE"
-  env HANZO_SHIM_STATE="$STATE" HANZO_SHIM_REPOS="$ROW" \
+  env ENGINE_SHIM_STATE="$STATE" ENGINE_SHIM_REPOS="$ROW" \
       FAKE_TAGS="$FAKE_TAGS" FAKE_RELEASES="${FAKE_RELEASES:-}" \
       FAKE_RUN_BRANCHES="${FAKE_RUN_BRANCHES:-}" GH_CALLS="$GH_CALLS" \
       sh "$SHIM" "$@" >"$TMP/out" 2>&1 || { bad "$desc: shim exited nonzero"; cat "$TMP/out"; }
@@ -49,9 +49,9 @@ ncalls(){ [ -s "$GH_CALLS" ] && grep -c . "$GH_CALLS" || echo 0; }
 
 echo "== shim_test =="
 
-# T1 -- newest_tag picks highest SEMVER, not lexical; ignores non-v / ml-v tags.
+# T1: newest_tag picks highest SEMVER, not lexical; ignores non-v / ml-v tags.
 # shellcheck source=/dev/null
-( HANZO_SHIM_LIB=1 . "$SHIM"
+( ENGINE_SHIM_LIB=1 . "$SHIM"
   FAKE_TAGS="v1.7.9
 v1.7.89
 v1.7.91
@@ -92,10 +92,10 @@ check "T4 superseded gaps -> 0 dispatches" "$(ncalls)" "0"
 : >"$GH_CALLS"; S5="$TMP/state5"; rm -rf "$S5"
 FAKE_TAGS="v1.7.91
 v1.7.92"; FAKE_RELEASES="v1.7.91"
-env HANZO_SHIM_STATE="$S5" HANZO_SHIM_REPOS="$ROW" FAKE_TAGS="$FAKE_TAGS" \
+env ENGINE_SHIM_STATE="$S5" ENGINE_SHIM_REPOS="$ROW" FAKE_TAGS="$FAKE_TAGS" \
     FAKE_RELEASES="$FAKE_RELEASES" FAKE_RUN_BRANCHES="" GH_CALLS="$GH_CALLS" sh "$SHIM" --once >/dev/null 2>&1
 first=$(ncalls)
-env HANZO_SHIM_STATE="$S5" HANZO_SHIM_REPOS="$ROW" FAKE_TAGS="$FAKE_TAGS" \
+env ENGINE_SHIM_STATE="$S5" ENGINE_SHIM_REPOS="$ROW" FAKE_TAGS="$FAKE_TAGS" \
     FAKE_RELEASES="$FAKE_RELEASES" FAKE_RUN_BRANCHES="" GH_CALLS="$GH_CALLS" sh "$SHIM" --once >/dev/null 2>&1
 second=$(ncalls)
 check "T5 first pass dispatched" "$first" "2"

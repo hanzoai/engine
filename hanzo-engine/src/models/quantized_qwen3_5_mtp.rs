@@ -19,21 +19,31 @@ use crate::kv_cache::KvCache;
 use crate::layers::QRmsNorm;
 use crate::layers::Qwen3VLRotaryEmbedding;
 use crate::models::quantized_qwen3_5_moe::{
-    gguf_qmm, DecoderLayer, DenseMlp, GatedFullAttention, LayerImpl, ModelWeights, MoeOrMlp,
-    PropsGGUF,
+    gguf_qmm, DecoderLayer, DenseMlp, DeviceHadamard, GatedFullAttention, HadamardMeta, LayerImpl,
+    ModelWeights, MoeOrMlp, PropsGGUF,
 };
 use crate::models::qwen3_5_mtp::{
     chain_cache, default_n_predict, MtpOut, MtpStep, Qwen3_5MtpProposer,
 };
-use crate::speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer};
+use crate::speculative::{MtpConfig, SelfSpeculative, SpeculativeProposer, SpeculativeSharedHeads};
 
 /// The tensor that says a GGUF carries a head, relative to its block prefix.
 pub const NEXTN_EH_PROJ: &str = "nextn.eh_proj.weight";
+
+pub(crate) struct GgufMtpLoadParams<'a> {
+    pub(crate) props: &'a PropsGGUF,
+    pub(crate) rotary: Arc<Qwen3VLRotaryEmbedding>,
+    pub(crate) device: &'a Device,
+    pub(crate) dtype: DType,
+    pub(crate) max_draft: usize,
+    pub(crate) hadamard: Option<(&'a Arc<DeviceHadamard>, &'a HadamardMeta)>,
+}
 
 pub struct Qwen35GgufMtpHead {
     enorm: QRmsNorm,
     hnorm: QRmsNorm,
     eh_proj: Arc<dyn QuantMethod>,
+    eh_proj_had: Option<Arc<DeviceHadamard>>,
     layer: DecoderLayer,
     norm: QRmsNorm,
     cache: KvCache,
@@ -43,14 +53,18 @@ pub struct Qwen35GgufMtpHead {
 
 impl Qwen35GgufMtpHead {
     /// Load the head trailing the transformer blocks `props` describes.
-    pub fn load<R: std::io::Seek + std::io::Read>(
+    pub(crate) fn load<R: std::io::Seek + std::io::Read>(
         ct: &mut Content<'_, R>,
-        props: &PropsGGUF,
-        rotary: Arc<Qwen3VLRotaryEmbedding>,
-        device: &Device,
-        dtype: DType,
-        max_draft: usize,
+        params: GgufMtpLoadParams<'_>,
     ) -> Result<Self> {
+        let GgufMtpLoadParams {
+            props,
+            rotary,
+            device,
+            dtype,
+            max_draft,
+            hadamard,
+        } = params;
         if props.nextn_predict_layers == 0 {
             hanzo_ml::bail!(
                 "`--mtp-model` requested but this GGUF carries no built-in MTP head (nextn_predict_layers = 0)."
@@ -66,12 +80,23 @@ impl Qwen35GgufMtpHead {
         let prefix = format!("blk.{}", props.block_count);
         let eps = props.rms_norm_eps;
 
+        let mut attn = GatedFullAttention::load(ct, &prefix, props, rotary, None, device, dtype)?;
+        let mut dense = DenseMlp::load(ct, &prefix, device)?;
+        let mut eh_proj_had = None;
+        if let Some((had, hm)) = hadamard {
+            attn = attn.with_hadamard(had, hm, &prefix);
+            dense = dense.with_hadamard(had, hm, &prefix);
+            let eh_folded = hm.is_folded(&format!("{prefix}.{NEXTN_EH_PROJ}"))
+                || hm.is_folded(&format!("{prefix}.eh_proj.weight"));
+            if eh_folded {
+                eh_proj_had = Some(Arc::clone(had));
+            }
+        }
+
         // The block keeps its own KV, so it takes no paged slot: `None` here is what routes its
         // attention through `cache` instead of the target's paged cache.
         let layer = DecoderLayer {
-            layer_impl: LayerImpl::FullAttention(GatedFullAttention::load(
-                ct, &prefix, props, rotary, None, device, dtype,
-            )?),
+            layer_impl: LayerImpl::FullAttention(attn),
             input_layernorm: QRmsNorm::new(
                 ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
                 eps,
@@ -80,8 +105,9 @@ impl Qwen35GgufMtpHead {
                 ct.tensor(&format!("{prefix}.post_attention_norm.weight"), device)?,
                 eps,
             )?,
-            mlp: MoeOrMlp::Mlp(DenseMlp::load(ct, &prefix, device)?),
-        };
+            mlp: MoeOrMlp::Mlp(dense),
+        }
+        .with_folded_norm_signs(props.embedding_length)?;
 
         Ok(Self {
             enorm: QRmsNorm::new(
@@ -93,6 +119,7 @@ impl Qwen35GgufMtpHead {
                 eps,
             )?,
             eh_proj: gguf_qmm(ct.tensor(&format!("{prefix}.{NEXTN_EH_PROJ}"), device)?)?,
+            eh_proj_had,
             layer,
             norm: QRmsNorm::new(
                 ct.tensor(&format!("{prefix}.nextn.shared_head_norm.weight"), device)?,
@@ -113,9 +140,12 @@ impl Qwen35GgufMtpHead {
         // The two norms carry the dtype of their own GGUF weights; the projection reads one.
         let embeds = self.enorm.forward(input_embeds)?.to_dtype(self.dtype)?;
         let hidden = self.hnorm.forward(target_hidden)?.to_dtype(self.dtype)?;
-        let xs = self
-            .eh_proj
-            .forward(&Tensor::cat(&[embeds, hidden], D::Minus1)?.contiguous()?)?;
+        let cat = Tensor::cat(&[embeds, hidden], D::Minus1)?.contiguous()?;
+        let cat = match &self.eh_proj_had {
+            Some(had) => had.forward(&cat)?,
+            None => cat,
+        };
+        let xs = self.eh_proj.forward(&cat)?;
         let cos_sin = self.layer.rotary_cos_sin(positions, xs.dtype())?;
         // Every cached row precedes this query, so the step needs no mask.
         let xs =
@@ -164,18 +194,45 @@ impl SelfSpeculative for ModelWeights {
             .n_predict
             .unwrap_or(default_n_predict(self.props().embedding_length))
             .max(1);
+        let file_hadamard = match HadamardMeta::from_gguf_metadata(ct.get_metadata())? {
+            Some(hm) => {
+                let had = Arc::new(DeviceHadamard::new(&hm, &self.device)?);
+                Some((had, hm))
+            }
+            None => None,
+        };
+        let hadamard = match file_hadamard.as_ref() {
+            Some((had, hm)) => Some((had, hm)),
+            None => self.hadamard_for_mtp(),
+        };
         let head = Qwen35GgufMtpHead::load(
             &mut ct,
-            self.props(),
-            self.rotary(),
-            &self.device,
-            self.compute_dtype(),
-            n_predict,
+            GgufMtpLoadParams {
+                props: self.props(),
+                rotary: self.rotary(),
+                device: &self.device,
+                dtype: self.compute_dtype(),
+                max_draft: n_predict,
+                hadamard,
+            },
         )?;
+        let mut heads: SpeculativeSharedHeads = self.shared_heads();
+        if !self.has_embed_hadamard() {
+            if let Some((had, hm)) = hadamard {
+                if hm.is_inverse("token_embd.weight") {
+                    let base_embed = heads.embed;
+                    let embed_had = Arc::clone(had);
+                    heads.embed = Arc::new(move |ids: &Tensor| {
+                        let z = base_embed(ids)?;
+                        embed_had.inverse(&z)
+                    });
+                }
+            }
+        }
         self.set_store_spec(true);
         Ok(Box::new(Qwen3_5MtpProposer::new(
             Box::new(head),
-            self.shared_heads(),
+            heads,
             n_predict,
             self.mtp_anchors(),
         )))
@@ -282,7 +339,17 @@ mod tests {
             &device,
             props.mrope_section.clone(),
         )?);
-        Qwen35GgufMtpHead::load(&mut ct, &props, rotary, &device, DType::F32, n_predict)
+        Qwen35GgufMtpHead::load(
+            &mut ct,
+            GgufMtpLoadParams {
+                props: &props,
+                rotary,
+                device: &device,
+                dtype: DType::F32,
+                max_draft: n_predict,
+                hadamard: None,
+            },
+        )
     }
 
     /// The head maps one row per sequence to one hidden state per sequence, and a chained step
@@ -392,6 +459,195 @@ mod tests {
         // Each round consumes its anchor positions, so a stale draft is impossible.
         assert!(anchors.lock().expect("anchors").is_none());
         assert!(propose(&mut proposer, Some(hidden)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn gguf_mtp_head_hadamard_wiring_matches_unfolded_reference() -> Result<()> {
+        let device = Device::Cpu;
+        let dir = tempfile::tempdir().map_err(hanzo_ml::Error::msg)?;
+        let mut p = props();
+        p.embedding_length = 16;
+        p.head_dim = 16;
+        p.rot_dim = 8;
+        let h = p.embedding_length;
+        let ffn = 32usize;
+        let prefix = format!("blk.{DEPTH}");
+
+        let widths = [h, 2 * h, ffn];
+        let mut sign_widths = Vec::new();
+        let mut sign_values = Vec::new();
+        for (wi, &w) in widths.iter().enumerate() {
+            sign_widths.push(gguf_file::Value::I32(i32::try_from(w).unwrap()));
+            for i in 0..w {
+                let s = if (i + wi * 3) % 2 == 0 { 1i8 } else { -1i8 };
+                sign_values.push(gguf_file::Value::I8(s));
+            }
+        }
+        let folded_names = [
+            format!("{prefix}.nextn.eh_proj.weight"),
+            format!("{prefix}.attn_q.weight"),
+            format!("{prefix}.attn_k.weight"),
+            format!("{prefix}.attn_v.weight"),
+            format!("{prefix}.attn_output.weight"),
+            format!("{prefix}.ffn_gate.weight"),
+            format!("{prefix}.ffn_up.weight"),
+            format!("{prefix}.ffn_down.weight"),
+        ];
+        let mut kv = std::collections::HashMap::new();
+        kv.insert("prism.hadamard.version".into(), gguf_file::Value::U32(1));
+        kv.insert("prism.hadamard.block_size".into(), gguf_file::Value::U32(8));
+        kv.insert(
+            "prism.hadamard.transform".into(),
+            gguf_file::Value::String("normalized-sylvester-walsh-hadamard".into()),
+        );
+        kv.insert(
+            "prism.hadamard.axis".into(),
+            gguf_file::Value::String("input-last-dimension".into()),
+        );
+        kv.insert(
+            "prism.hadamard.sign_mode".into(),
+            gguf_file::Value::String("explicit".into()),
+        );
+        kv.insert(
+            "prism.hadamard.sign_widths".into(),
+            gguf_file::Value::Array(sign_widths),
+        );
+        kv.insert(
+            "prism.hadamard.sign_values".into(),
+            gguf_file::Value::Array(sign_values),
+        );
+        kv.insert(
+            "prism.hadamard.weight_names".into(),
+            gguf_file::Value::Array(
+                folded_names
+                    .iter()
+                    .cloned()
+                    .map(gguf_file::Value::String)
+                    .collect(),
+            ),
+        );
+        kv.insert(
+            "prism.hadamard.inverse_weight_names".into(),
+            gguf_file::Value::Array(vec![gguf_file::Value::String("token_embd.weight".into())]),
+        );
+
+        let hm = HadamardMeta::from_gguf_metadata(&kv)?.unwrap();
+        let had = Arc::new(DeviceHadamard::new(&hm, &device)?);
+
+        let shapes: &[(&str, usize, usize)] = &[
+            ("nextn.eh_proj.weight", h, 2 * h),
+            ("nextn.enorm.weight", h, 1),
+            ("nextn.hnorm.weight", h, 1),
+            ("nextn.shared_head_norm.weight", h, 1),
+            ("attn_norm.weight", h, 1),
+            ("post_attention_norm.weight", h, 1),
+            ("attn_q.weight", 2 * HEADS * HEAD_DIM, h),
+            ("attn_k.weight", KV_HEADS * HEAD_DIM, h),
+            ("attn_v.weight", KV_HEADS * HEAD_DIM, h),
+            ("attn_output.weight", h, HEADS * HEAD_DIM),
+            ("attn_q_norm.weight", HEAD_DIM, 1),
+            ("attn_k_norm.weight", HEAD_DIM, 1),
+            ("ffn_gate.weight", ffn, h),
+            ("ffn_up.weight", ffn, h),
+            ("ffn_down.weight", h, ffn),
+        ];
+
+        let plain_path = dir.path().join("plain.gguf");
+        let folded_path = dir.path().join("folded.gguf");
+        let mut plain_owned = Vec::with_capacity(shapes.len());
+        let mut folded_owned = Vec::with_capacity(shapes.len());
+        for (seed, (name, rows, cols)) in shapes.iter().enumerate() {
+            let full_name = format!("{prefix}.{name}");
+            let t = synthetic(*rows, *cols, u32::try_from(seed).unwrap() + 101, &device)?;
+            let t_plain = if *cols == 1 {
+                t.flatten_all()?
+            } else {
+                t.clone()
+            };
+            let t_fold = if hm.is_folded(&full_name) {
+                had.forward(&t)?
+            } else {
+                t_plain.clone()
+            };
+            plain_owned.push((
+                full_name.clone(),
+                QTensor::quantize(&t_plain, GgmlDType::F32)?,
+            ));
+            folded_owned.push((full_name, QTensor::quantize(&t_fold, GgmlDType::F32)?));
+        }
+
+        let arch = gguf_file::Value::String("qwen35".to_string());
+        {
+            let refs: Vec<(&str, &QTensor)> =
+                plain_owned.iter().map(|(n, q)| (n.as_str(), q)).collect();
+            let mut f = std::fs::File::create(&plain_path).map_err(hanzo_ml::Error::msg)?;
+            gguf_file::write(&mut f, &[("general.architecture", &arch)], &refs)?;
+        }
+        {
+            let refs: Vec<(&str, &QTensor)> =
+                folded_owned.iter().map(|(n, q)| (n.as_str(), q)).collect();
+            let mut f = std::fs::File::create(&folded_path).map_err(hanzo_ml::Error::msg)?;
+            gguf_file::write(&mut f, &[("general.architecture", &arch)], &refs)?;
+        }
+
+        let rotary = Arc::new(Qwen3VLRotaryEmbedding::new(
+            p.rope_freq_base,
+            p.rot_dim,
+            &device,
+            p.mrope_section.clone(),
+        )?);
+
+        let mut f_plain = [std::fs::File::open(&plain_path).map_err(hanzo_ml::Error::msg)?];
+        let mut r_plain: Vec<&mut std::fs::File> = f_plain.iter_mut().collect();
+        let mut ct_plain = Content::from_readers(&mut r_plain)?;
+        let mut head_plain = Qwen35GgufMtpHead::load(
+            &mut ct_plain,
+            GgufMtpLoadParams {
+                props: &p,
+                rotary: rotary.clone(),
+                device: &device,
+                dtype: DType::F32,
+                max_draft: 2,
+                hadamard: None,
+            },
+        )?;
+
+        let mut f_fold = [std::fs::File::open(&folded_path).map_err(hanzo_ml::Error::msg)?];
+        let mut r_fold: Vec<&mut std::fs::File> = f_fold.iter_mut().collect();
+        let mut ct_fold = Content::from_readers(&mut r_fold)?;
+        let mut head_fold = Qwen35GgufMtpHead::load(
+            &mut ct_fold,
+            GgufMtpLoadParams {
+                props: &p,
+                rotary,
+                device: &device,
+                dtype: DType::F32,
+                max_draft: 2,
+                hadamard: Some((&had, &hm)),
+            },
+        )?;
+
+        let emb_table = synthetic(VOCAB, h, 201, &device)?;
+        let emb_table_folded = had.forward(&emb_table)?;
+        let ids = Tensor::from_vec(vec![3u32, 9], (2, 1), &device)?;
+        let embeds_plain = emb_table
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 1, h))?;
+        let embeds_unrot = had
+            .inverse(&emb_table_folded.index_select(&ids.flatten_all()?, 0)?)?
+            .reshape((2, 1, h))?;
+
+        let target_h = synthetic(2, h, 202, &device)?.reshape((2, 1, h))?;
+        let pos = positions(&[[5, 5, 5], [8, 8, 8]], &device)?;
+
+        let out_plain = head_plain.step(&[0, 1], &embeds_plain, &target_h, &pos)?;
+        let out_fold = head_fold.step(&[0, 1], &embeds_unrot, &target_h, &pos)?;
+        let diff = (&out_plain.head - &out_fold.head)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(diff < 1e-4, "Hadamard GGUF MTP head mismatch: diff={diff}");
         Ok(())
     }
 }

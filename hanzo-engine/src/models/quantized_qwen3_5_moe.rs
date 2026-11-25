@@ -394,162 +394,209 @@ impl HadamardMeta {
     }
 }
 
-/// Precomputed normalized Sylvester-Walsh-Hadamard operator `H_B` + per-width `±1` signs on one `Device`.
+const MAX_FWHT_BLOCK: usize = 8192;
+
+#[inline]
+fn can_fuse_single_row_iq_q8(x: &Tensor, block_size: usize) -> bool {
+    let Some(&width) = x.dims().last() else {
+        return false;
+    };
+    x.device().is_cuda()
+        && x.rank() >= 2
+        && width >= 32
+        && width.is_multiple_of(32)
+        && (1..=MAX_FWHT_BLOCK).contains(&block_size)
+        && width.is_multiple_of(block_size)
+        && x.elem_count() == width
+}
+
+fn cpu_fwht_blocks(
+    data: &mut [f32],
+    width: usize,
+    block: usize,
+    signs: Option<&[f32]>,
+    inverse: bool,
+) {
+    let scale = 1.0f32 / (block as f32).sqrt();
+    for row in data.chunks_exact_mut(width) {
+        if !inverse {
+            if let Some(s) = signs {
+                for (v, &sv) in row.iter_mut().zip(s.iter()) {
+                    *v *= sv;
+                }
+            }
+        }
+        for blk in row.chunks_exact_mut(block) {
+            let mut stride = 1usize;
+            while stride < block {
+                let step = stride * 2;
+                let mut base = 0usize;
+                while base < block {
+                    for j in 0..stride {
+                        let a = blk[base + j];
+                        let b = blk[base + j + stride];
+                        blk[base + j] = a + b;
+                        blk[base + j + stride] = a - b;
+                    }
+                    base += step;
+                }
+                stride = step;
+            }
+            for v in blk.iter_mut() {
+                *v *= scale;
+            }
+        }
+        if inverse {
+            if let Some(s) = signs {
+                for (v, &sv) in row.iter_mut().zip(s.iter()) {
+                    *v *= sv;
+                }
+            }
+        }
+    }
+}
+
 pub(crate) struct DeviceHadamard {
     block_size: usize,
     explicit_signs: bool,
-    h_b: Tensor,
     signs: HashMap<usize, Tensor>,
+    signs_host: HashMap<usize, Vec<f32>>,
 }
 
 impl DeviceHadamard {
     pub(crate) fn new(meta: &HadamardMeta, device: &Device) -> Result<Self> {
         let b = meta.block_size;
-        let scale = 1.0f32 / (b as f32).sqrt();
-        let mut h_data = vec![0.0f32; b * b];
-        for r in 0..b {
-            let row = &mut h_data[r * b..(r + 1) * b];
-            for (c, slot) in row.iter_mut().enumerate() {
-                *slot = if ((r & c).count_ones() & 1) == 0 {
-                    scale
-                } else {
-                    -scale
-                };
-            }
+        if b == 0 || !b.is_power_of_two() {
+            hanzo_ml::bail!("Hadamard block_size must be a power of two, got {b}");
         }
-        let h_b = Tensor::from_vec(h_data, (b, b), device)?;
         let mut signs = HashMap::with_capacity(meta.signs.len());
+        let mut signs_host = HashMap::with_capacity(meta.signs.len());
         for (&width, vals) in &meta.signs {
             signs.insert(width, Tensor::from_vec(vals.clone(), width, device)?);
+            signs_host.insert(width, vals.clone());
         }
         Ok(Self {
             block_size: b,
             explicit_signs: meta.explicit_signs,
-            h_b,
             signs,
+            signs_host,
         })
     }
 
-    /// Forward activation fold `T(x) = ((x * signs).reshape(-1, B) @ H_B).reshape_as(x)`.
-    pub(crate) fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub(crate) fn signs_for(&self, width: usize) -> Result<Option<&Tensor>> {
+        if let Some(s) = self.signs.get(&width) {
+            Ok(Some(s))
+        } else if self.explicit_signs {
+            hanzo_ml::bail!("Missing Hadamard sign vector for width {width}");
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn transform(&self, x: &Tensor, apply_signs: bool, inverse: bool) -> Result<Tensor> {
         let orig_dtype = x.dtype();
         let orig_shape = x.shape().clone();
         let Some(&width) = orig_shape.dims().last() else {
-            hanzo_ml::bail!("Hadamard forward expects rank >= 1");
+            hanzo_ml::bail!("Hadamard transform expects rank >= 1");
         };
-        if !width.is_multiple_of(self.block_size) {
+        if width == 0 || !width.is_multiple_of(self.block_size) {
             hanzo_ml::bail!(
-                "Hadamard forward width {width} is not divisible by block_size {}",
+                "Hadamard width {width} is not divisible by block_size {}",
                 self.block_size
             );
         }
-        let signs = if let Some(s) = self.signs.get(&width) {
-            Some(s)
-        } else if self.explicit_signs {
-            hanzo_ml::bail!("Missing Hadamard sign vector for width {width}");
+        let signs = if apply_signs {
+            self.signs_for(width)?
         } else {
             None
         };
         if let Some(out) = prof::timed(x.device(), &prof::HADAMARD_NS, || {
-            hanzo_ml::fwht::try_hadamard_fwht(x, signs, self.block_size, false)
+            hanzo_ml::fwht::try_hadamard_fwht(x, signs, self.block_size, inverse)
         })? {
             return Ok(out);
         }
-        #[cfg(feature = "cuda")]
-        if x.device().is_cuda() && self.block_size.is_power_of_two() && self.block_size <= 8192 {
+        if (2..=MAX_FWHT_BLOCK).contains(&self.block_size)
+            && matches!(orig_dtype, DType::F32 | DType::F16 | DType::BF16)
+        {
             return prof::timed(x.device(), &prof::HADAMARD_NS, || {
-                hanzo_ml::quantized::cuda::hadamard_fwht(x, signs, self.block_size, false)
+                hanzo_ml::quantized::hadamard_fwht(x, signs, self.block_size, inverse)
             });
         }
-        let xf = if orig_dtype == DType::F32 {
-            x.clone()
-        } else {
-            x.to_dtype(DType::F32)?
-        };
-        let xf = match signs {
-            Some(s) => xf.broadcast_mul(s)?,
-            None => xf,
-        };
-        let rows = orig_shape.elem_count() / self.block_size;
-        let out = xf
-            .reshape((rows, self.block_size))?
-            .matmul(&self.h_b)?
-            .reshape(orig_shape)?;
-        if orig_dtype == DType::F32 {
-            Ok(out)
-        } else {
-            out.to_dtype(orig_dtype)
-        }
-    }
-
-    /// Inverse lookup fold `T^{-1}(u) = (u.reshape(-1, B) @ H_B).reshape_as(u) * signs`.
-    pub(crate) fn inverse(&self, u: &Tensor) -> Result<Tensor> {
-        let orig_dtype = u.dtype();
-        let orig_shape = u.shape().clone();
-        let Some(&width) = orig_shape.dims().last() else {
-            hanzo_ml::bail!("Hadamard inverse expects rank >= 1");
-        };
-        if !width.is_multiple_of(self.block_size) {
-            hanzo_ml::bail!(
-                "Hadamard inverse width {width} is not divisible by block_size {}",
-                self.block_size
-            );
-        }
-        let signs = if let Some(s) = self.signs.get(&width) {
-            Some(s)
-        } else if self.explicit_signs {
-            hanzo_ml::bail!("Missing Hadamard sign vector for width {width}");
+        let mut data = x.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let signs_slice = if apply_signs {
+            self.signs_host.get(&width).map(Vec::as_slice)
         } else {
             None
         };
-        if let Some(out) = prof::timed(u.device(), &prof::HADAMARD_NS, || {
-            hanzo_ml::fwht::try_hadamard_fwht(u, signs, self.block_size, true)
-        })? {
-            return Ok(out);
-        }
-        #[cfg(feature = "cuda")]
-        if u.device().is_cuda() && self.block_size.is_power_of_two() && self.block_size <= 8192 {
-            return prof::timed(u.device(), &prof::HADAMARD_NS, || {
-                hanzo_ml::quantized::cuda::hadamard_fwht(u, signs, self.block_size, true)
-            });
-        }
-        let uf = if orig_dtype == DType::F32 {
-            u.clone()
-        } else {
-            u.to_dtype(DType::F32)?
-        };
-        let rows = orig_shape.elem_count() / self.block_size;
-        let out = uf
-            .reshape((rows, self.block_size))?
-            .matmul(&self.h_b)?
-            .reshape(orig_shape)?;
-        let out = match signs {
-            Some(s) => out.broadcast_mul(s)?,
-            None => out,
-        };
+        cpu_fwht_blocks(&mut data, width, self.block_size, signs_slice, inverse);
+        let out = Tensor::from_vec(data, orig_shape, x.device())?;
         if orig_dtype == DType::F32 {
             Ok(out)
         } else {
             out.to_dtype(orig_dtype)
         }
     }
+
+    pub(crate) fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    pub(crate) fn forward_iq_q8(
+        &self,
+        x: &Tensor,
+        presigned: bool,
+    ) -> Result<hanzo_ml::quantized::IqQ8Activation> {
+        let Some(&width) = x.dims().last() else {
+            hanzo_ml::bail!("Hadamard expects rank >= 1");
+        };
+        let signs = if presigned {
+            None
+        } else {
+            self.signs_for(width)?
+        };
+        prof::timed(x.device(), &prof::HADAMARD_NS, || {
+            hanzo_ml::quantized::QMatMul::hadamard_fwht_iq_q8(x, signs, self.block_size, false)
+        })
+    }
+
+    pub(crate) fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        self.transform(x, true, false)
+    }
+
+    pub(crate) fn forward_presigned(&self, x: &Tensor) -> Result<Tensor> {
+        self.transform(x, false, false)
+    }
+
+    pub(crate) fn inverse(&self, u: &Tensor) -> Result<Tensor> {
+        self.transform(u, true, true)
+    }
 }
 
-/// Token embedding table keeping quantized rows resident on CPU/CUDA/Metal instead of expanding
-/// large vocab tables (e.g. 248,320 x 5,120 = 5.08 GB F32 on 27B) on load.
+/// Token embedding table keeping quantized rows resident on CPU/CUDA/Metal (or host-gathered on
+/// Vulkan/ROCm) instead of expanding large vocab tables (e.g. 248,320 x 5,120 = 5.09 GB F32 on 27B,
+/// which exceeds Vulkan's 4 GiB `maxStorageBufferRange` on NVIDIA GPUs and clamps token IDs >= 209,715).
 #[derive(Clone)]
 enum TokEmbedding {
     Dense(Embedding),
     Quantized(Arc<QTensor>),
+    QuantizedHost { q: Arc<QTensor>, target: Device },
 }
 
 impl TokEmbedding {
-    fn from_gguf_qtensor(q: Arc<QTensor>, hidden_size: usize, device: &Device) -> Result<Self> {
-        let can_gather_quantized =
-            matches!(device, Device::Cpu | Device::Cuda(_) | Device::Metal(_))
-                && hidden_size.is_multiple_of(q.dtype().block_size());
-        if can_gather_quantized {
+    fn from_gguf_qtensor(
+        q: Arc<QTensor>,
+        host_q: Option<Arc<QTensor>>,
+        hidden_size: usize,
+        device: &Device,
+    ) -> Result<Self> {
+        let block_aligned = hidden_size.is_multiple_of(q.dtype().block_size());
+        if matches!(device, Device::Cpu | Device::Cuda(_) | Device::Metal(_)) && block_aligned {
             Ok(Self::Quantized(q))
+        } else if let Some(hq) = host_q.filter(|_| block_aligned) {
+            Ok(Self::QuantizedHost {
+                q: hq,
+                target: device.clone(),
+            })
         } else {
             Ok(Self::Dense(Embedding::new(
                 q.dequantize(device)?,
@@ -562,13 +609,17 @@ impl TokEmbedding {
         match self {
             Self::Dense(e) => e.forward(ids),
             Self::Quantized(q) => q.embedding(ids),
+            Self::QuantizedHost { q, target } => {
+                let ids_cpu = ids.to_device(&Device::Cpu)?;
+                q.embedding(&ids_cpu)?.to_device(target)
+            }
         }
     }
 
     fn dtype(&self) -> DType {
         match self {
             Self::Dense(e) => e.embeddings().dtype(),
-            Self::Quantized(_) => DType::F32,
+            Self::Quantized(_) | Self::QuantizedHost { .. } => DType::F32,
         }
     }
 }
@@ -950,6 +1001,7 @@ pub(crate) struct DenseMlp {
     gate_had: Option<Arc<DeviceHadamard>>,
     up_had: Option<Arc<DeviceHadamard>>,
     down_had: Option<Arc<DeviceHadamard>>,
+    presigned_input: bool,
 }
 
 impl DenseMlp {
@@ -965,6 +1017,7 @@ impl DenseMlp {
             gate_had: None,
             up_had: None,
             down_had: None,
+            presigned_input: false,
         })
     }
 
@@ -984,8 +1037,74 @@ impl DenseMlp {
         self
     }
 
+    pub(crate) fn input_hadamard_for_norm_fold(&self) -> Option<&Arc<DeviceHadamard>> {
+        if self.gate_had.is_some() && self.up_had.is_some() {
+            self.gate_had.as_ref()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn set_presigned_input(&mut self) {
+        self.presigned_input = true;
+    }
+
+    pub(crate) fn can_fuse_norm_fwht_q8(&self) -> Option<usize> {
+        if self.presigned_input
+            && self.gate.supports_shared_iq_q8()
+            && self.up.supports_shared_iq_q8()
+        {
+            self.gate_had.as_ref().map(|h| h.block_size())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn forward_iq_q8(
+        &self,
+        q8: &hanzo_ml::quantized::IqQ8Activation,
+        out_dtype: DType,
+    ) -> Result<Tensor> {
+        let dev = self.gate.dtype_and_device().1;
+        let (gate, up) = prof::timed(&dev, &prof::QPROJ_MLP_NS, || {
+            let gate = self.gate.forward_iq_q8_dtype(q8, out_dtype)?;
+            let up = self.up.forward_iq_q8_dtype(q8, out_dtype)?;
+            Ok((gate, up))
+        })?;
+        self.finish_down(gate, up, out_dtype)
+    }
+
+    fn finish_down(&self, gate: Tensor, up: Tensor, out_dtype: DType) -> Result<Tensor> {
+        let y = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+        if let Some(ref had) = self.down_had {
+            if self.down.supports_shared_iq_q8() && can_fuse_single_row_iq_q8(&y, had.block_size())
+            {
+                let q8 = had.forward_iq_q8(&y, false)?;
+                return prof::timed(y.device(), &prof::QPROJ_MLP_NS, || {
+                    self.down.forward_iq_q8_dtype(&q8, out_dtype)
+                });
+            }
+            let y_rot = had.forward(&y)?;
+            return prof::timed(y.device(), &prof::QPROJ_MLP_NS, || {
+                self.down.forward(&y_rot)
+            });
+        }
+        prof::timed(y.device(), &prof::QPROJ_MLP_NS, || self.down.forward(&y))
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        if let (Some(ref g_had), true, true) = (
+            &self.gate_had,
+            self.up_had.is_some(),
+            self.gate.supports_shared_iq_q8() && self.up.supports_shared_iq_q8(),
+        ) {
+            if can_fuse_single_row_iq_q8(xs, g_had.block_size()) {
+                let q8 = g_had.forward_iq_q8(xs, self.presigned_input)?;
+                return self.forward_iq_q8(&q8, xs.dtype());
+            }
+        }
         let xs_rot = match self.gate_had.as_ref().or(self.up_had.as_ref()) {
+            Some(had) if self.presigned_input => Some(had.forward_presigned(xs)?),
             Some(had) => Some(had.forward(xs)?),
             None => None,
         };
@@ -1004,12 +1123,7 @@ impl DenseMlp {
             let up = self.up.forward(up_in)?;
             Ok((gate, up))
         })?;
-        let y = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-        let y = match &self.down_had {
-            Some(had) => had.forward(&y)?,
-            None => y,
-        };
-        prof::timed(xs.device(), &prof::QPROJ_MLP_NS, || self.down.forward(&y))
+        self.finish_down(gate, up, xs.dtype())
     }
 }
 
@@ -1050,6 +1164,7 @@ pub(crate) struct GatedFullAttention {
     k_had: Option<Arc<DeviceHadamard>>,
     v_had: Option<Arc<DeviceHadamard>>,
     o_had: Option<Arc<DeviceHadamard>>,
+    presigned_input: bool,
 }
 
 impl GatedFullAttention {
@@ -1112,6 +1227,7 @@ impl GatedFullAttention {
             k_had: None,
             v_had: None,
             o_had: None,
+            presigned_input: false,
         })
     }
 
@@ -1135,6 +1251,30 @@ impl GatedFullAttention {
         self.v_had = pick("attn_v.weight");
         self.o_had = pick("attn_output.weight");
         self
+    }
+
+    pub(crate) fn input_hadamard_for_norm_fold(&self) -> Option<&Arc<DeviceHadamard>> {
+        if self.q_had.is_some() && self.k_had.is_some() && self.v_had.is_some() {
+            self.q_had.as_ref()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn set_presigned_input(&mut self) {
+        self.presigned_input = true;
+    }
+
+    pub(crate) fn can_fuse_norm_fwht_q8(&self) -> Option<usize> {
+        if self.presigned_input
+            && self.attn_q.supports_shared_iq_q8()
+            && self.attn_k.supports_shared_iq_q8()
+            && self.attn_v.supports_shared_iq_q8()
+        {
+            self.q_had.as_ref().map(|h| h.block_size())
+        } else {
+            None
+        }
     }
 
     /// The attention of one full-attention block at `prefix`. `paged_attn` is `None` for a block
@@ -1180,6 +1320,7 @@ impl GatedFullAttention {
             k_had: None,
             v_had: None,
             o_had: None,
+            presigned_input: false,
         })
     }
 
@@ -1228,6 +1369,84 @@ impl GatedFullAttention {
         self.output(&y, &gate, x.dtype())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn forward_with_q8(
+        &self,
+        q8: &hanzo_ml::quantized::IqQ8Activation,
+        out_dtype: DType,
+        b_sz: usize,
+        seq_len: usize,
+        dev: &Device,
+        mask: &AttentionMask,
+        cos_sin: &(Tensor, Tensor),
+        kv_cache: &mut KvCache,
+        paged: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+    ) -> Result<Tensor> {
+        let (q_gate, k, v) = prof::timed(dev, &prof::QPROJ_ATTN_NS, || {
+            let q_gate = self.attn_q.forward_iq_q8_dtype(q8, out_dtype)?;
+            let k = self.attn_k.forward_iq_q8_dtype(q8, out_dtype)?;
+            let v = self.attn_v.forward_iq_q8_dtype(q8, out_dtype)?;
+            Ok((q_gate, k, v))
+        })?;
+        let (q, k, v, gate) =
+            self.split_norm_rope_qkv(q_gate, k, v, b_sz, seq_len, dev, cos_sin)?;
+        let y = prof::timed(dev, &prof::FULL_ATTN_NS, || {
+            self.attend(&q, &k, &v, mask, kv_cache, paged)
+        })?;
+        self.output(&y, &gate, out_dtype)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn split_norm_rope_qkv(
+        &self,
+        q_gate: Tensor,
+        k: Tensor,
+        v: Tensor,
+        b_sz: usize,
+        seq_len: usize,
+        dev: &Device,
+        cos_sin: &(Tensor, Tensor),
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
+        prof::timed(dev, &prof::FULL_ATTN_NS, || {
+            let q_gate = q_gate.reshape((b_sz, seq_len, self.n_head, self.head_dim * 2))?;
+            let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
+            let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
+            let gate = gate.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
+
+            let (q, k, v) = if seq_len != 1 {
+                let q = q.transpose(1, 2)?;
+                let k = k
+                    .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                    .transpose(1, 2)?;
+                let v = v
+                    .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                    .transpose(1, 2)?;
+                (q, k, v)
+            } else {
+                let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+                let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+                let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+                (q, k, v)
+            };
+
+            let (q, k) = self.rotary.forward_qk_norm_served(
+                cos_sin,
+                &q.contiguous()?,
+                &k.contiguous()?,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+            )?;
+
+            Ok((
+                q.to_dtype(self.dtype)?,
+                k.to_dtype(self.dtype)?,
+                v.to_dtype(self.dtype)?,
+                gate,
+            ))
+        })
+    }
+
     /// `(q, k, v, gate)`: q, k and v as `[batch, heads, seq, head_dim]` in the compute dtype, with
     /// q and k normed and roped, and the pre-sigmoid output gate as `[batch, seq, heads·head_dim]`.
     pub(crate) fn project(
@@ -1237,12 +1456,33 @@ impl GatedFullAttention {
     ) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
+        if let (Some(ref q_had), true, true) = (
+            &self.q_had,
+            self.k_had.is_some() && self.v_had.is_some(),
+            self.attn_q.supports_shared_iq_q8()
+                && self.attn_k.supports_shared_iq_q8()
+                && self.attn_v.supports_shared_iq_q8(),
+        ) {
+            if can_fuse_single_row_iq_q8(x, q_had.block_size()) {
+                let q8 = q_had.forward_iq_q8(x, self.presigned_input)?;
+                let out_dtype = x.dtype();
+                let (q_gate, k, v) = prof::timed(x.device(), &prof::QPROJ_ATTN_NS, || {
+                    let q_gate = self.attn_q.forward_iq_q8_dtype(&q8, out_dtype)?;
+                    let k = self.attn_k.forward_iq_q8_dtype(&q8, out_dtype)?;
+                    let v = self.attn_v.forward_iq_q8_dtype(&q8, out_dtype)?;
+                    Ok((q_gate, k, v))
+                })?;
+                return self.split_norm_rope_qkv(q_gate, k, v, b_sz, seq_len, x.device(), cos_sin);
+            }
+        }
+
         let x_rot = match self
             .q_had
             .as_ref()
             .or(self.k_had.as_ref())
             .or(self.v_had.as_ref())
         {
+            Some(had) if self.presigned_input => Some(had.forward_presigned(x)?),
             Some(had) => Some(had.forward(x)?),
             None => None,
         };
@@ -1269,46 +1509,7 @@ impl GatedFullAttention {
             Ok((q_gate, k, v))
         })?;
 
-        prof::timed(x.device(), &prof::FULL_ATTN_NS, || {
-            // Split q_gate into q and gate (interleaved per head: [q_head, gate_head] * n_head).
-            let q_gate = q_gate.reshape((b_sz, seq_len, self.n_head, self.head_dim * 2))?;
-            let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
-            let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
-            let gate = gate.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
-
-            let (q, k, v) = if seq_len != 1 {
-                let q = q.transpose(1, 2)?;
-                let k = k
-                    .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                    .transpose(1, 2)?;
-                let v = v
-                    .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                    .transpose(1, 2)?;
-                (q, k, v)
-            } else {
-                let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-                let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-                let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-                (q, k, v)
-            };
-
-            // qk RMSNorm then partial NeoX RoPE with the served kernel's roundings.
-            let (q, k) = self.rotary.forward_qk_norm_served(
-                cos_sin,
-                &q.contiguous()?,
-                &k.contiguous()?,
-                self.q_norm.weight(),
-                self.k_norm.weight(),
-                self.q_norm.eps(),
-            )?;
-
-            Ok((
-                q.to_dtype(self.dtype)?,
-                k.to_dtype(self.dtype)?,
-                v.to_dtype(self.dtype)?,
-                gate,
-            ))
-        })
+        self.split_norm_rope_qkv(q_gate, k, v, b_sz, seq_len, x.device(), cos_sin)
     }
 
     /// `project`'s q attended over this block's cache once k and v are written to it, as
@@ -1384,10 +1585,20 @@ impl GatedFullAttention {
             let gate = sigmoid(&gate.to_dtype(DType::F32)?)?;
             y.to_dtype(DType::F32)?.broadcast_mul(&gate)
         })?;
-        let y = match &self.o_had {
-            Some(had) => had.forward(&y)?,
-            None => y,
-        };
+        if let Some(ref had) = self.o_had {
+            if self.attn_o.supports_shared_iq_q8()
+                && can_fuse_single_row_iq_q8(&y, had.block_size())
+            {
+                let q8 = had.forward_iq_q8(&y, false)?;
+                return prof::timed(y.device(), &prof::QPROJ_ATTN_NS, || {
+                    self.attn_o.forward_iq_q8_dtype(&q8, dtype)
+                });
+            }
+            let y_rot = had.forward(&y)?;
+            return prof::timed(y.device(), &prof::QPROJ_ATTN_NS, || {
+                self.attn_o.forward(&y_rot)?.to_dtype(dtype)
+            });
+        }
         prof::timed(y.device(), &prof::QPROJ_ATTN_NS, || {
             self.attn_o.forward(&y)?.to_dtype(dtype)
         })
@@ -1659,55 +1870,91 @@ impl QGatedDeltaNet {
         cache: &mut GdnLayerCache,
         mut probe: Option<&mut Vec<(&'static str, Tensor)>>,
     ) -> Result<Tensor> {
+        let is_probed = probe.is_some();
         let mut note = |name: &'static str, t: &Tensor| {
             if let Some(p) = probe.as_mut() {
                 p.push((name, t.clone()));
             }
         };
         let rd = x.dtype();
-        let store = |t: Tensor| -> Result<Tensor> { t.to_dtype(rd)?.to_dtype(DType::F32) };
-        let x = &x.to_dtype(DType::F32)?;
+        let fast_cuda = !is_probed && x.device().is_cuda();
+        let store = |t: Tensor| -> Result<Tensor> {
+            if fast_cuda {
+                if t.dtype() == DType::F32 {
+                    Ok(t)
+                } else {
+                    t.to_dtype(DType::F32)
+                }
+            } else {
+                t.to_dtype(rd)?.to_dtype(DType::F32)
+            }
+        };
+        let x_f32_buf;
+        let x: &Tensor = if fast_cuda {
+            x
+        } else {
+            x_f32_buf = x.to_dtype(DType::F32)?;
+            &x_f32_buf
+        };
         let (batch_size, seq_len, _hidden) = x.dims3()?;
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
         // 1-2. Projections: qkv is merged [q | k | v]; z is the gate; b and a are bf16 GEMMs.
-        let x_rot = match self
-            .qkv_had
-            .as_ref()
-            .or(self.z_had.as_ref())
-            .or(self.b_had.as_ref())
-            .or(self.a_had.as_ref())
-        {
-            Some(had) => Some(had.forward(x)?),
-            None => None,
-        };
-        let qkv_in = if self.qkv_had.is_some() {
-            x_rot.as_ref().unwrap()
+        let proj_out_dt = if fast_cuda { DType::F32 } else { rd };
+        let (mixed_qkv, z, b, a) = if let (Some(ref qkv_had), true, true) = (
+            &self.qkv_had,
+            self.z_had.is_some() && self.b_had.is_none() && self.a_had.is_none(),
+            self.in_proj_qkv.supports_shared_iq_q8()
+                && self.in_proj_z.supports_shared_iq_q8()
+                && can_fuse_single_row_iq_q8(x, self.qkv_had.as_ref().unwrap().block_size()),
+        ) {
+            let q8 = qkv_had.forward_iq_q8(x, false)?;
+            prof::timed(x.device(), &prof::QPROJ_GDN_NS, || {
+                let mixed_qkv = store(self.in_proj_qkv.forward_iq_q8_dtype(&q8, proj_out_dt)?)?;
+                let z = store(self.in_proj_z.forward_iq_q8_dtype(&q8, proj_out_dt)?)?;
+                let b = store(self.in_proj_b.forward(x)?)?;
+                let a = store(self.in_proj_a.forward(x)?)?;
+                Ok((mixed_qkv, z, b, a))
+            })?
         } else {
-            x
+            let x_rot = match self
+                .qkv_had
+                .as_ref()
+                .or(self.z_had.as_ref())
+                .or(self.b_had.as_ref())
+                .or(self.a_had.as_ref())
+            {
+                Some(had) => Some(had.forward(x)?),
+                None => None,
+            };
+            let qkv_in = if self.qkv_had.is_some() {
+                x_rot.as_ref().unwrap()
+            } else {
+                x
+            };
+            let z_in = if self.z_had.is_some() {
+                x_rot.as_ref().unwrap()
+            } else {
+                x
+            };
+            let b_in = if self.b_had.is_some() {
+                x_rot.as_ref().unwrap()
+            } else {
+                x
+            };
+            let a_in = if self.a_had.is_some() {
+                x_rot.as_ref().unwrap()
+            } else {
+                x
+            };
+            prof::timed(x.device(), &prof::QPROJ_GDN_NS, || {
+                let mixed_qkv = store(self.in_proj_qkv.forward(qkv_in)?)?;
+                let z = store(self.in_proj_z.forward(z_in)?)?;
+                let b = store(self.in_proj_b.forward(b_in)?)?;
+                let a = store(self.in_proj_a.forward(a_in)?)?;
+                Ok((mixed_qkv, z, b, a))
+            })?
         };
-        let z_in = if self.z_had.is_some() {
-            x_rot.as_ref().unwrap()
-        } else {
-            x
-        };
-        let b_in = if self.b_had.is_some() {
-            x_rot.as_ref().unwrap()
-        } else {
-            x
-        };
-        let a_in = if self.a_had.is_some() {
-            x_rot.as_ref().unwrap()
-        } else {
-            x
-        };
-        let (mixed_qkv, z, b, a) = prof::timed(x.device(), &prof::QPROJ_GDN_NS, || {
-            let mixed_qkv = store(self.in_proj_qkv.forward(qkv_in)?)?;
-            let z = store(self.in_proj_z.forward(z_in)?)?;
-            let b = store(self.in_proj_b.forward(b_in)?)?;
-            let a = store(self.in_proj_a.forward(a_in)?)?;
-            Ok((mixed_qkv, z, b, a))
-        })?;
         let prof_gdn_t0 = if prof::enabled() {
             x.device().synchronize()?;
             Some(std::time::Instant::now())
@@ -1722,108 +1969,155 @@ impl QGatedDeltaNet {
         cache.trail_conv(&mixed_qkv)?;
 
         // 3. Causal conv1d over the concatenated qkv, then silu.
-        let mixed_qkv = if rd != DType::F32 {
-            self.causal_conv1d_served(&mixed_qkv, cache, rd)?
-        } else {
+        let mixed_qkv = if fast_cuda || rd == DType::F32 {
             self.conv(&mixed_qkv, cache)?
+        } else {
+            self.causal_conv1d_served(&mixed_qkv, cache, rd)?
         };
         let mixed_qkv = store(mixed_qkv)?;
         note("conv", &mixed_qkv);
 
-        // 3-8 on ROCm: one launch from the conv output to the gated norm's output. A forward that
-        // keeps a trail steps the recurrence per position below instead.
         #[cfg(feature = "rocm")]
-        if mixed_qkv.device().is_rocm()
+        let use_rocm_mixer = mixed_qkv.device().is_rocm()
             && cache.trail.is_none()
             && self.head_k_dim == 128
-            && self.head_v_dim == 128
-        {
-            let f32s = |t: &Tensor| t.to_dtype(DType::F32)?.contiguous();
-            let y = hanzo_ml::rocm_backend::gdn_mixer_rocm(
-                &mixed_qkv,
-                &f32s(&a)?,
-                &f32s(&b)?,
-                &f32s(&z.reshape((batch_size, seq_len, self.value_dim))?)?,
-                &self.a,
-                &self.dt_bias,
-                &self.norm.weight,
-                &cache.recurrent_state,
-                self.num_k_heads,
-                self.norm.eps() as f32,
-                self.norm.gates_with_sigmoid(),
-            )?;
-            cache.seqlen_offset += seq_len;
-            return self.out_proj.forward(&y)?.to_dtype(rd);
-        }
+            && self.head_v_dim == 128;
+        #[cfg(not(feature = "rocm"))]
+        let use_rocm_mixer = false;
 
-        let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
-        let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
-        let v = mixed_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
-        let q = q.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
-        let k = k.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
-        let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-
-        // 4. beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias), softplus as the served
-        //    kernel forms it (identity past 20).
-        let beta = sigmoid(&b)?;
-        let dt_bias = self
-            .dt_bias
-            .to_dtype(DType::F32)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?;
-        let xa = a.broadcast_add(&dt_bias)?;
-        let sp = {
-            let pos = (xa.clone() + (xa.neg()?.exp()? + 1.0)?.log()?)?;
-            let neg = (xa.exp()? + 1.0)?.log()?;
-            let zero = xa.zeros_like()?;
-            let sp = xa.gt(&zero)?.where_cond(&pos, &neg)?;
-            xa.le(20.0)?.where_cond(&sp, &xa)?
-        };
-        let g = self
-            .a
-            .to_dtype(DType::F32)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?
-            .broadcast_mul(&sp)?;
-        note("g", &g);
-        note("beta", &beta);
-
-        // 5. Tile q, k to the V-head count: V head j reads key head j % num_k_heads.
-        let (q, k) = if v_per_group > 1 {
-            let tile = |t: &Tensor| {
-                t.unsqueeze(2)?.repeat((1, 1, v_per_group, 1, 1))?.reshape((
-                    batch_size,
-                    seq_len,
-                    self.num_v_heads,
-                    self.head_k_dim,
-                ))
-            };
-            (tile(&q)?, tile(&k)?)
+        let y = if use_rocm_mixer {
+            #[cfg(feature = "rocm")]
+            {
+                let f32s = |t: &Tensor| t.to_dtype(DType::F32)?.contiguous();
+                let y = hanzo_ml::rocm_backend::gdn_mixer_rocm(
+                    &mixed_qkv,
+                    &f32s(&a)?,
+                    &f32s(&b)?,
+                    &f32s(&z.reshape((batch_size, seq_len, self.value_dim))?)?,
+                    &self.a,
+                    &self.dt_bias,
+                    &self.norm.weight,
+                    &cache.recurrent_state,
+                    self.num_k_heads,
+                    self.norm.eps() as f32,
+                    self.norm.gates_with_sigmoid(),
+                )?;
+                cache.seqlen_offset += seq_len;
+                y
+            }
+            #[cfg(not(feature = "rocm"))]
+            {
+                unreachable!()
+            }
         } else {
-            (q, k)
+            let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
+            let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
+            let v = mixed_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
+            let q = q.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
+            let k = k.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
+            let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
+
+            let (beta, g) = {
+                #[cfg(feature = "cuda")]
+                {
+                    if fast_cuda {
+                        let b_flat = b.contiguous()?.flatten_all()?;
+                        let a_flat = a.contiguous()?.flatten_all()?;
+                        let (beta_flat, g_flat) = crate::cuda::gdn::fused_gdn_gating_cuda(
+                            &b_flat,
+                            &a_flat,
+                            &self.a,
+                            &self.dt_bias,
+                        )?;
+                        let shape = b.shape();
+                        (beta_flat.reshape(shape)?, g_flat.reshape(shape)?)
+                    } else {
+                        let beta = sigmoid(&b)?;
+                        let dt_bias = self.dt_bias.unsqueeze(0)?.unsqueeze(0)?;
+                        let xa = a.broadcast_add(&dt_bias)?;
+                        let sp = {
+                            let pos = (xa.clone() + (xa.neg()?.exp()? + 1.0)?.log()?)?;
+                            let neg = (xa.exp()? + 1.0)?.log()?;
+                            let zero = xa.zeros_like()?;
+                            let sp = xa.gt(&zero)?.where_cond(&pos, &neg)?;
+                            xa.le(20.0)?.where_cond(&sp, &xa)?
+                        };
+                        let g = self.a.unsqueeze(0)?.unsqueeze(0)?.broadcast_mul(&sp)?;
+                        (beta, g)
+                    }
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    let beta = sigmoid(&b)?;
+                    let dt_bias = self.dt_bias.unsqueeze(0)?.unsqueeze(0)?;
+                    let xa = a.broadcast_add(&dt_bias)?;
+                    let sp = {
+                        let pos = (xa.clone() + (xa.neg()?.exp()? + 1.0)?.log()?)?;
+                        let neg = (xa.exp()? + 1.0)?.log()?;
+                        let zero = xa.zeros_like()?;
+                        let sp = xa.gt(&zero)?.where_cond(&pos, &neg)?;
+                        xa.le(20.0)?.where_cond(&sp, &xa)?
+                    };
+                    let g = self.a.unsqueeze(0)?.unsqueeze(0)?.broadcast_mul(&sp)?;
+                    (beta, g)
+                }
+            };
+            note("g", &g);
+            note("beta", &beta);
+
+            let (q, k) = if fast_cuda {
+                let q = l2_norm(&q, L2_NORM_EPS)?;
+                let k = l2_norm(&k, L2_NORM_EPS)?;
+                if v_per_group > 1 {
+                    let tile = |t: &Tensor| {
+                        t.unsqueeze(2)?.repeat((1, 1, v_per_group, 1, 1))?.reshape((
+                            batch_size,
+                            seq_len,
+                            self.num_v_heads,
+                            self.head_k_dim,
+                        ))
+                    };
+                    (tile(&q)?, tile(&k)?)
+                } else {
+                    (q, k)
+                }
+            } else {
+                let (q, k) = if v_per_group > 1 {
+                    let tile = |t: &Tensor| {
+                        t.unsqueeze(2)?.repeat((1, 1, v_per_group, 1, 1))?.reshape((
+                            batch_size,
+                            seq_len,
+                            self.num_v_heads,
+                            self.head_k_dim,
+                        ))
+                    };
+                    (tile(&q)?, tile(&k)?)
+                } else {
+                    (q, k)
+                };
+                (
+                    store(l2_norm(&q, L2_NORM_EPS)?)?,
+                    store(l2_norm(&k, L2_NORM_EPS)?)?,
+                )
+            };
+            note("q", &q);
+            note("k", &k);
+            note("v", &v);
+
+            let y = store(cache.recurrence(&q, &k, &v, &g, &beta)?)?;
+            note("core", &y);
+            cache.seqlen_offset += seq_len;
+
+            let z_shape = z.shape().clone();
+            let y = y.reshape(((), self.head_v_dim))?;
+            let z = z.reshape(((), self.head_v_dim))?;
+            let y = store(self.norm.forward(&y, &z)?)?;
+            let y = y
+                .reshape(z_shape)?
+                .reshape((batch_size, seq_len, self.value_dim))?;
+            note("normed", &y);
+            y
         };
-
-        // 6. L2-normalize q and k, one rounding.
-        let q = store(l2_norm(&q, L2_NORM_EPS)?)?;
-        let k = store(l2_norm(&k, L2_NORM_EPS)?)?;
-        note("q", &q);
-        note("k", &k);
-        note("v", &v);
-
-        // 7. Recurrent gated delta rule in f32; its output is stored.
-        let y = store(cache.recurrence(&q, &k, &v, &g, &beta)?)?;
-        note("core", &y);
-        cache.seqlen_offset += seq_len;
-
-        // 8. Gated RMSNorm with z (stored), then the output projection.
-        let z_shape = z.shape().clone();
-        let y = y.reshape(((), self.head_v_dim))?;
-        let z = z.reshape(((), self.head_v_dim))?;
-        let y = store(self.norm.forward(&y, &z)?)?;
-        let y = y
-            .reshape(z_shape)?
-            .reshape((batch_size, seq_len, self.value_dim))?;
-        note("normed", &y);
 
         // When `ssm_out.weight` was Hadamard-folded in HF grouped V-head order (`gdn_v_grouped`),
         // transpose tiled `[batch, seq, v_per_group, num_k_heads, head_v_dim]` back to grouped
@@ -1849,10 +2143,20 @@ impl QGatedDeltaNet {
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
-        let y = match &self.out_had {
-            Some(had) => had.forward(&y)?,
-            None => y,
-        };
+        if let Some(ref had) = self.out_had {
+            if self.out_proj.supports_shared_iq_q8()
+                && can_fuse_single_row_iq_q8(&y, had.block_size())
+            {
+                let q8 = had.forward_iq_q8(&y, false)?;
+                return prof::timed(x.device(), &prof::QPROJ_GDN_NS, || {
+                    self.out_proj.forward_iq_q8_dtype(&q8, rd)
+                });
+            }
+            let y_rot = had.forward(&y)?;
+            return prof::timed(x.device(), &prof::QPROJ_GDN_NS, || {
+                self.out_proj.forward(&y_rot)?.to_dtype(rd)
+            });
+        }
 
         prof::timed(x.device(), &prof::QPROJ_GDN_NS, || {
             self.out_proj.forward(&y)?.to_dtype(rd)
@@ -1925,8 +2229,21 @@ impl QGatedDeltaNet {
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (_batch, seq_len, _conv_dim) = x.dims3()?;
 
-        // Vulkan conv1d single-step kernel (gdn_conv1d_step_vulkan) isn't ported to canonical
-        // hanzo-ml yet; the portable hanzo-ml path below runs correctly on the Vulkan device.
+        #[cfg(feature = "cuda")]
+        if x.device().is_cuda() && seq_len == 1 {
+            let cs_dtype = cache.conv_state.dtype();
+            let x_t = x.to_dtype(cs_dtype)?.transpose(1, 2)?.contiguous()?;
+            let weight = self.conv1d_weight.to_dtype(cs_dtype)?.contiguous()?;
+            let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                self.conv_kernel_size,
+                true,
+            )?;
+            cache.conv_state = new_conv_state;
+            return output.transpose(1, 2);
+        }
 
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
@@ -1993,9 +2310,15 @@ impl QGatedDeltaNet {
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
-            let weight = self.conv1d_weight.to_dtype(x_t.dtype())?.contiguous()?;
+            let cs_dtype = cache.conv_state.dtype();
+            let x_cs = if x_t.dtype() == cs_dtype {
+                x_t
+            } else {
+                x_t.to_dtype(cs_dtype)?.contiguous()?
+            };
+            let weight = self.conv1d_weight.to_dtype(cs_dtype)?.contiguous()?;
             let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
-                &x_t,
+                &x_cs,
                 &weight,
                 &cache.conv_state,
                 self.conv_kernel_size,
@@ -2056,6 +2379,27 @@ pub(crate) struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    pub(crate) fn with_folded_norm_signs(mut self, hidden_size: usize) -> Result<Self> {
+        if let LayerImpl::FullAttention(ref mut attn) = self.layer_impl {
+            if let Some(had) = attn.input_hadamard_for_norm_fold().cloned() {
+                if let Some(signs) = had.signs_for(hidden_size)? {
+                    self.input_layernorm = self.input_layernorm.mul_weight(signs)?;
+                }
+                attn.set_presigned_input();
+            }
+        }
+        if let MoeOrMlp::Mlp(ref mut dense) = self.mlp {
+            if let Some(had) = dense.input_hadamard_for_norm_fold().cloned() {
+                if let Some(signs) = had.signs_for(hidden_size)? {
+                    self.post_attention_layernorm =
+                        self.post_attention_layernorm.mul_weight(signs)?;
+                }
+                dense.set_presigned_input();
+            }
+        }
+        Ok(self)
+    }
+
     /// This block's MRoPE cos/sin for `[3, batch, seq]` position ids.
     pub(crate) fn rotary_cos_sin(
         &self,
@@ -2079,12 +2423,58 @@ impl DecoderLayer {
         let LayerImpl::FullAttention(attn) = &self.layer_impl else {
             hanzo_ml::bail!("expected a full-attention block");
         };
+        let (b_sz, seq_len, _) = x.dims3()?;
         let residual = x.clone();
-        let normed = self.input_layernorm.forward(x)?;
-        let x = (attn.forward(&normed, mask, cos_sin, kv_cache, None)? + residual)?;
-        let residual = x.clone();
-        let normed = self.post_attention_layernorm.forward(&x)?;
-        self.mlp.forward(&normed)? + residual
+        let attn_out = if let Some(b) = attn
+            .can_fuse_norm_fwht_q8()
+            .filter(|&b| can_fuse_single_row_iq_q8(x, b))
+        {
+            let q8 = prof::timed(x.device(), &prof::HADAMARD_NS, || {
+                hanzo_ml::quantized::QMatMul::rms_norm_hadamard_fwht_iq_q8(
+                    x,
+                    self.input_layernorm.weight(),
+                    self.input_layernorm.eps() as f32,
+                    None,
+                    b,
+                )
+            })?;
+            attn.forward_with_q8(
+                &q8,
+                x.dtype(),
+                b_sz,
+                seq_len,
+                x.device(),
+                mask,
+                cos_sin,
+                kv_cache,
+                None,
+            )?
+        } else {
+            let normed = self.input_layernorm.forward(x)?;
+            attn.forward(&normed, mask, cos_sin, kv_cache, None)?
+        };
+        if let MoeOrMlp::Mlp(ref dense) = self.mlp {
+            if let Some(b) = dense
+                .can_fuse_norm_fwht_q8()
+                .filter(|&b| can_fuse_single_row_iq_q8(&attn_out, b))
+            {
+                let (x_mid, q8) = prof::timed(x.device(), &prof::HADAMARD_NS, || {
+                    hanzo_ml::quantized::QMatMul::add_rms_norm_hadamard_fwht_iq_q8(
+                        &attn_out,
+                        &residual,
+                        self.post_attention_layernorm.weight(),
+                        self.post_attention_layernorm.eps() as f32,
+                        None,
+                        b,
+                    )
+                })?;
+                return dense.forward_iq_q8(&q8, x_mid.dtype())? + x_mid;
+            }
+        }
+        let (x_mid, normed) = self
+            .post_attention_layernorm
+            .forward_of_sum(&attn_out, &residual)?;
+        self.mlp.forward(&normed)? + x_mid
     }
 }
 
@@ -2277,6 +2667,8 @@ impl PropsGGUF {
 pub struct ModelWeights {
     tok_embeddings: TokEmbedding,
     embed_hadamard: Option<Arc<DeviceHadamard>>,
+    hadamard_meta: Option<HadamardMeta>,
+    root_hadamard: Option<Arc<DeviceHadamard>>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
     norm: QRmsNorm,
@@ -2379,9 +2771,20 @@ impl ModelConfig::FromGGUF for ModelWeights {
         }
 
         let has_output_weight = ct.has_tensor("output.weight");
-        let qtok_embeddings = Arc::new(ct.tensor("token_embd.weight", device)?);
+        let host_qtok_embeddings =
+            if !matches!(device, Device::Cpu | Device::Cuda(_) | Device::Metal(_)) {
+                Some(Arc::new(ct.tensor("token_embd.weight", &Device::Cpu)?))
+            } else {
+                None
+            };
+        let qtok_embeddings = if has_output_weight && host_qtok_embeddings.is_some() {
+            Arc::clone(host_qtok_embeddings.as_ref().unwrap())
+        } else {
+            Arc::new(ct.tensor("token_embd.weight", device)?)
+        };
         let tok_embeddings = TokEmbedding::from_gguf_qtensor(
             Arc::clone(&qtok_embeddings),
+            host_qtok_embeddings,
             props.embedding_length,
             device,
         )?;
@@ -2491,13 +2894,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 MoeOrMlp::Mlp(dense)
             };
 
-            layers.push(DecoderLayer {
-                layer_impl,
-                input_layernorm,
-                post_attention_layernorm,
-                mlp,
-            });
+            layers.push(
+                DecoderLayer {
+                    layer_impl,
+                    input_layernorm,
+                    post_attention_layernorm,
+                    mlp,
+                }
+                .with_folded_norm_signs(props.embedding_length)?,
+            );
         }
+
+        let root_hadamard = hadamards.get(&device.location()).cloned();
 
         // Pipeline hybrid cache (recurrent pool for GDN layers + KV cache for attention layers).
         let pipeline_layer_types: Vec<HybridLayerType> = layer_types
@@ -2515,8 +2923,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 conv_width: props.conv_kernel,
                 state_dims: vec![props.num_v_heads, props.head_k_dim, props.head_v_dim],
                 conv_dtype: dtype,
-                // The ROCm fused GDN mixer reads and writes its recurrent state as f32.
-                state_dtype: if device.is_rocm() { DType::F32 } else { dtype },
+                // The CUDA and ROCm fused GDN mixers mutate recurrent state in place as f32.
+                state_dtype: if device.is_rocm() || device.is_cuda() {
+                    DType::F32
+                } else {
+                    dtype
+                },
             },
         );
         let pipeline_cache = Arc::new(Mutex::new(
@@ -2527,6 +2939,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
         Ok(Self {
             tok_embeddings,
             embed_hadamard,
+            hadamard_meta,
+            root_hadamard,
             layers,
             layer_types,
             norm,
@@ -2637,8 +3051,6 @@ impl ModelWeights {
                 x = mapper.map(x, layer_idx)?;
             }
             let residual = x.clone();
-            let normed = layer.input_layernorm.forward(&x)?;
-
             let attn_out = match &layer.layer_impl {
                 LayerImpl::FullAttention(attn) => {
                     let paged = metadata
@@ -2650,15 +3062,43 @@ impl ModelWeights {
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not attention.");
                     };
-                    attn.forward(
-                        &normed,
-                        &mask.get(normed.device()),
-                        &cos_sin,
-                        kv_cache,
-                        paged,
-                    )?
+                    if let Some(b) = attn
+                        .can_fuse_norm_fwht_q8()
+                        .filter(|&b| can_fuse_single_row_iq_q8(&x, b))
+                    {
+                        let q8 = prof::timed(x.device(), &prof::HADAMARD_NS, || {
+                            hanzo_ml::quantized::QMatMul::rms_norm_hadamard_fwht_iq_q8(
+                                &x,
+                                layer.input_layernorm.weight(),
+                                layer.input_layernorm.eps() as f32,
+                                None,
+                                b,
+                            )
+                        })?;
+                        attn.forward_with_q8(
+                            &q8,
+                            x.dtype(),
+                            b_sz,
+                            seq_len,
+                            x.device(),
+                            &mask.get(x.device()),
+                            &cos_sin,
+                            kv_cache,
+                            paged,
+                        )?
+                    } else {
+                        let normed = layer.input_layernorm.forward(&x)?;
+                        attn.forward(
+                            &normed,
+                            &mask.get(normed.device()),
+                            &cos_sin,
+                            kv_cache,
+                            paged,
+                        )?
+                    }
                 }
                 LayerImpl::LinearAttention(gdn) => {
+                    let normed = layer.input_layernorm.forward(&x)?;
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     else {
                         hanzo_ml::bail!("Hybrid cache layer {layer_idx} not recurrent.");
@@ -2693,11 +3133,32 @@ impl ModelWeights {
                 }
             };
 
-            let x_mid = (attn_out + residual)?;
-            let residual = &x_mid;
-            let normed = layer.post_attention_layernorm.forward(&x_mid)?;
-            let ffn_out = layer.mlp.forward(&normed)?;
-            x = (ffn_out + residual)?;
+            x = if let Some((dense, b)) = match &layer.mlp {
+                MoeOrMlp::Mlp(dense) => dense
+                    .can_fuse_norm_fwht_q8()
+                    .filter(|&b| can_fuse_single_row_iq_q8(&attn_out, b))
+                    .map(|b| (dense, b)),
+                MoeOrMlp::FusedMoe(_) => None,
+            } {
+                let (x_mid, q8) = prof::timed(attn_out.device(), &prof::HADAMARD_NS, || {
+                    hanzo_ml::quantized::QMatMul::add_rms_norm_hadamard_fwht_iq_q8(
+                        &attn_out,
+                        &residual,
+                        layer.post_attention_layernorm.weight(),
+                        layer.post_attention_layernorm.eps() as f32,
+                        None,
+                        b,
+                    )
+                })?;
+                let ffn_out = dense.forward_iq_q8(&q8, x_mid.dtype())?;
+                (ffn_out + &x_mid)?
+            } else {
+                let (x_mid, normed) = layer
+                    .post_attention_layernorm
+                    .forward_of_sum(&attn_out, &residual)?;
+                let ffn_out = layer.mlp.forward(&normed)?;
+                (ffn_out + &x_mid)?
+            };
 
             // Metal prefill hazard drain. The GDN + generic-MoE prefill path churns many
             // short-lived pooled Metal buffers, and the device buffer pool recycles on
@@ -2722,9 +3183,51 @@ impl ModelWeights {
         }
 
         let x = x.to_device(&self.device)?;
-        let x = self.norm.forward(&x)?;
         let x = extract_logits(&x, context_lens.clone())?;
-        if self.store_spec.load(Ordering::Relaxed) {
+        let store_spec = self.store_spec.load(Ordering::Relaxed);
+        if !store_spec {
+            if let Some(ref had) = self.output_hadamard {
+                if self.output.supports_shared_iq_q8()
+                    && can_fuse_single_row_iq_q8(&x, had.block_size())
+                {
+                    let signs = had.signs_for(self.props.embedding_length)?;
+                    let q8 = prof::timed(&self.device, &prof::HADAMARD_NS, || {
+                        hanzo_ml::quantized::QMatMul::rms_norm_hadamard_fwht_iq_q8(
+                            &x,
+                            self.norm.weight(),
+                            self.norm.eps() as f32,
+                            signs,
+                            had.block_size(),
+                        )
+                    })?;
+                    let out = prof::timed(&self.device, &prof::LM_HEAD_NS, || {
+                        self.output.forward_iq_q8_dtype(&q8, x.dtype())
+                    })?;
+                    if let Some(t0) = prof_t0 {
+                        self.device.synchronize()?;
+                        prof::TOTAL_NS.fetch_add(
+                            t0.elapsed().as_nanos() as u64,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        if seq_len > 1 {
+                            prof::dump("prefill", seq_len, 1);
+                            prof::DECODE_STEPS.store(0, std::sync::atomic::Ordering::Relaxed);
+                            prof::reset();
+                        } else {
+                            let s = prof::DECODE_STEPS
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                + 1;
+                            if s == 1 || s % 16 == 0 {
+                                prof::dump("decode", seq_len, s);
+                            }
+                        }
+                    }
+                    return Ok(out);
+                }
+            }
+        }
+        let x = self.norm.forward(&x)?;
+        if store_spec {
             // The rows `extract_logits` kept, and where each sits in its sequence, so a row index
             // means the same position in both.
             let positions = context_lens
@@ -2784,6 +3287,17 @@ impl ModelWeights {
 
     pub(crate) fn compute_dtype(&self) -> DType {
         self.dtype
+    }
+
+    pub(crate) fn hadamard_for_mtp(&self) -> Option<(&Arc<DeviceHadamard>, &HadamardMeta)> {
+        match (&self.root_hadamard, &self.hadamard_meta) {
+            (Some(had), Some(hm)) => Some((had, hm)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn has_embed_hadamard(&self) -> bool {
+        self.embed_hadamard.is_some()
     }
 
     /// Stash the final-norm hidden state and positions of each forward for the MTP head.
@@ -3223,6 +3737,9 @@ mod tests {
                 QuantMethodConfig::Unquantized(Linear::new(tensor(name)?, None)),
             )?))
         };
+        let dt_bias = tensor("ssm_dt.bias")?;
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
         let twin = GatedDeltaNet {
             in_proj: GdnInProj::Split {
                 qkv: dense("attn_qkv.weight")?,
@@ -3231,8 +3748,10 @@ mod tests {
                 a: dense("ssm_alpha.weight")?,
             },
             conv1d_weight: tensor("ssm_conv1d.weight")?.unsqueeze(1)?,
-            dt_bias: tensor("ssm_dt.bias")?,
+            dt_bias,
+            dt_bias_f32,
             a_log,
+            neg_exp_a,
             norm: RmsNormGated::from_weight(tensor("ssm_norm.weight")?, f64::from(EPS)),
             out_proj: dense("ssm_out.weight")?,
             num_k_heads: GDN_HEADS,
@@ -3418,11 +3937,15 @@ mod tests {
     #[test]
     fn cuda_qwen35_stand_down_partial_rewind_kv_gdn_and_cuda_graph_parity() -> Result<()> {
         if !std::env::args().any(|a| a == "--exact")
-            && std::env::var_os("HANZO_CUDA_CAPTURE_ISOLATED").is_none()
+            && crate::engine_env_os(
+                "ENGINE_CUDA_CAPTURE_ISOLATED",
+                "HANZO_CUDA_CAPTURE_ISOLATED",
+            )
+            .is_none()
         {
             let exe = std::env::current_exe().map_err(hanzo_ml::Error::wrap)?;
             let out = std::process::Command::new(exe)
-                .env("HANZO_CUDA_CAPTURE_ISOLATED", "1")
+                .env("ENGINE_CUDA_CAPTURE_ISOLATED", "1")
                 .args([
                     "--exact",
                     "models::quantized_qwen3_5_moe::tests::cuda_qwen35_stand_down_partial_rewind_kv_gdn_and_cuda_graph_parity",
@@ -4000,6 +4523,101 @@ mod tests {
             conv_diff < 1e-2 && rec_diff < 1e-2,
             "final Qwen3.5 GDN state mismatch after stand-down+graph: conv={conv_diff}, rec={rec_diff}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn qwen35_rmsnorm_sign_folding_is_bit_exact() -> Result<()> {
+        let mut devices = vec![Device::Cpu];
+        #[cfg(feature = "cuda")]
+        if let Ok(cuda_dev) = Device::new_cuda(0) {
+            devices.push(cuda_dev);
+        }
+
+        for dev in devices {
+            for &block in &[1024usize, 4096] {
+                let width = block;
+                let sign_vals: Vec<i32> = (0..width)
+                    .map(|i| if (i * 11 + 5) % 2 == 0 { 1 } else { -1 })
+                    .collect();
+                let mut kv = HashMap::new();
+                kv.insert("prism.hadamard.version".into(), gguf_file::Value::U32(1));
+                kv.insert(
+                    "prism.hadamard.block_size".into(),
+                    gguf_file::Value::U32(block as u32),
+                );
+                kv.insert(
+                    "prism.hadamard.transform".into(),
+                    gguf_file::Value::String("normalized-sylvester-walsh-hadamard".into()),
+                );
+                kv.insert(
+                    "prism.hadamard.axis".into(),
+                    gguf_file::Value::String("input-last-dimension".into()),
+                );
+                kv.insert(
+                    "prism.hadamard.sign_mode".into(),
+                    gguf_file::Value::String("explicit".into()),
+                );
+                kv.insert(
+                    "prism.hadamard.sign_widths".into(),
+                    gguf_file::Value::Array(vec![gguf_file::Value::I32(width as i32)]),
+                );
+                kv.insert(
+                    "prism.hadamard.sign_values".into(),
+                    gguf_file::Value::Array(
+                        sign_vals
+                            .iter()
+                            .map(|&v| gguf_file::Value::I8(v as i8))
+                            .collect(),
+                    ),
+                );
+                kv.insert(
+                    "prism.hadamard.weight_names".into(),
+                    gguf_file::Value::Array(vec![gguf_file::Value::String(
+                        "blk.0.ffn_gate.weight".into(),
+                    )]),
+                );
+
+                let hm = HadamardMeta::from_gguf_metadata(&kv)?.unwrap();
+                let had = DeviceHadamard::new(&hm, &dev)?;
+                let signs = had.signs_for(width)?.unwrap();
+
+                let norm_w_vals: Vec<f32> = (0..width)
+                    .map(|i| 0.75 + ((i as f32) * 0.013).sin() * 0.4)
+                    .collect();
+                let norm =
+                    QRmsNorm::from_weight(Tensor::from_vec(norm_w_vals, (width,), &dev)?, 1e-6);
+                let signed_norm = norm.mul_weight(signs)?;
+
+                let x_vals: Vec<f32> = (0..(2 * width))
+                    .map(|i| ((i as f32) * 0.021 - 1.1).cos())
+                    .collect();
+                let x_f32 = Tensor::from_vec(x_vals, (2, width), &dev)?;
+
+                let dtypes: &[DType] = if dev.is_cuda() {
+                    &[DType::F32, DType::F16, DType::BF16]
+                } else {
+                    &[DType::F32]
+                };
+                for &dt in dtypes {
+                    let x = x_f32.to_dtype(dt)?;
+                    let unfolded = had.forward(&norm.forward(&x)?)?;
+                    let folded = had.forward_presigned(&signed_norm.forward(&x)?)?;
+                    let u_v = unfolded
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?;
+                    let f_v = folded
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?;
+                    assert_eq!(
+                        u_v, f_v,
+                        "sign-folded RMSNorm + FWHT must be IEEE-754 bit-exact (block={block}, dt={dt:?}, dev={dev:?})"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -74,6 +74,7 @@ impl RmsNormGated {
 
     /// Build directly from an already-materialized weight (e.g. a dequantized GGUF tensor).
     pub fn from_weight(weight: Tensor, eps: f64) -> Self {
+        let weight = weight.to_dtype(DType::F32).unwrap_or(weight);
         Self {
             weight,
             eps,
@@ -104,13 +105,13 @@ impl RmsNormGated {
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?.contiguous()?;
         let gate = gate.to_dtype(DType::F32)?;
-        let gate = match self.act {
-            Act::Silu => hanzo_nn::ops::silu(&gate)?,
-            Act::Sigmoid => sigmoid(&gate)?,
-        };
         let weight = self.weight.to_dtype(DType::F32)?;
         let normed = hanzo_nn::ops::rms_norm(&x, &weight, self.eps as f32)?;
-        normed.broadcast_mul(&gate)?.to_dtype(dtype)
+        let out = match self.act {
+            Act::Silu => crate::ops::mul_and_act(&gate, &normed, crate::layers::Activation::Silu)?,
+            Act::Sigmoid => normed.broadcast_mul(&sigmoid(&gate)?)?,
+        };
+        out.to_dtype(dtype)
     }
 }
 
@@ -374,13 +375,23 @@ pub fn sigmoid(x: &Tensor) -> Result<Tensor> {
     hanzo_nn::ops::sigmoid(x)
 }
 
-/// A/B knob: `GDN_FUSED_FALLBACK=1` forces the portable ops-composed scan on every backend,
-/// isolating the fused per-backend recurrence kernel's contribution. Default (unset) uses the fused
-/// kernel where one exists. Read once, cached.
+/// A/B knob: `ENGINE_GDN_PORTABLE=1` (or `GDN_FUSED_FALLBACK=1`) forces the portable ops-composed
+/// scan on every backend, isolating the fused per-backend recurrence kernel's contribution. Default
+/// (unset) uses the fused kernel where one exists. Read once, cached.
 fn gdn_force_portable() -> bool {
     static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FORCE.get_or_init(|| {
-        std::env::var("GDN_FUSED_FALLBACK").is_ok_and(|v| v != "0" && !v.is_empty())
+        for key in [
+            "ENGINE_GDN_PORTABLE",
+            "ENGINE_GDN_FUSED_FALLBACK",
+            "GDN_FUSED_FALLBACK",
+            "HANZO_GDN_FUSED_FALLBACK",
+        ] {
+            if let Ok(v) = std::env::var(key) {
+                return v != "0" && v != "false" && !v.is_empty();
+            }
+        }
+        false
     })
 }
 
@@ -468,6 +479,9 @@ fn recurrence_flatten(
     let bh = b * nh;
     let scale = 1.0 / (kd as f64).sqrt();
     let seq_dim = |t: &Tensor, d: usize| -> Result<Tensor> {
+        if s == 1 {
+            return t.to_dtype(DType::F32)?.contiguous()?.reshape((bh, 1, d));
+        }
         t.transpose(1, 2)?
             .contiguous()?
             .to_dtype(DType::F32)?
@@ -475,6 +489,9 @@ fn recurrence_flatten(
             .contiguous()
     };
     let scalar = |t: &Tensor| -> Result<Tensor> {
+        if s == 1 {
+            return t.to_dtype(DType::F32)?.contiguous()?.reshape((bh, 1));
+        }
         t.to_dtype(DType::F32)?
             .transpose(1, 2)?
             .contiguous()?
@@ -509,6 +526,9 @@ fn recurrence_unflatten(
     *state = state_flat
         .reshape((b, nh, kd, vd))?
         .to_dtype(state.dtype())?;
+    if s == 1 {
+        return out_bh.reshape((b, 1, nh, vd))?.to_dtype(q.dtype());
+    }
     out_bh
         .reshape((b, nh, s, vd))?
         .transpose(1, 2)?
@@ -657,7 +677,7 @@ fn recurrence_metal_step(
 }
 
 /// Portable f32 reference scan. Serves CPU, Vulkan, and any backend without a fused kernel.
-fn recurrence_portable(
+pub(crate) fn recurrence_portable(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -740,7 +760,9 @@ pub struct GatedDeltaNet {
     pub in_proj: GdnInProj,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
+    pub dt_bias_f32: Tensor,
     pub a_log: Tensor,
+    pub neg_exp_a: Tensor,
     pub norm: RmsNormGated,
     pub out_proj: Arc<dyn QuantMethod>,
     pub num_k_heads: usize,
@@ -853,6 +875,8 @@ impl GatedDeltaNet {
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
 
         let norm = RmsNormGated::new(
             head_v_dim,
@@ -874,7 +898,9 @@ impl GatedDeltaNet {
             in_proj,
             conv1d_weight,
             dt_bias,
+            dt_bias_f32,
             a_log,
+            neg_exp_a,
             norm,
             out_proj,
             num_k_heads,
@@ -1015,13 +1041,11 @@ impl GatedDeltaNet {
                     if b.device().is_cuda() {
                         let b_flat = b.contiguous()?.flatten_all()?;
                         let a_flat = a.contiguous()?.flatten_all()?;
-                        let a_log_f32 = self.a_log.to_dtype(DType::F32)?.contiguous()?;
-                        let dt_bias_f32 = self.dt_bias.to_dtype(DType::F32)?.contiguous()?;
                         let (beta_flat, g_flat) = crate::cuda::gdn::fused_gdn_gating_cuda(
                             &b_flat,
                             &a_flat,
-                            &a_log_f32,
-                            &dt_bias_f32,
+                            &self.neg_exp_a,
+                            &self.dt_bias_f32,
                         )?;
                         let shape = b.shape();
                         (beta_flat.reshape(shape)?, g_flat.reshape(shape)?)
@@ -1035,12 +1059,11 @@ impl GatedDeltaNet {
                         let b_flat = b.contiguous()?.flatten_all()?;
                         let a_flat = a.contiguous()?.flatten_all()?;
                         let a_log_f32 = self.a_log.to_dtype(DType::F32)?.contiguous()?;
-                        let dt_bias_f32 = self.dt_bias.to_dtype(DType::F32)?.contiguous()?;
                         let (beta_flat, g_flat) = crate::metal::gdn::fused_gdn_gating_metal(
                             &b_flat,
                             &a_flat,
                             &a_log_f32,
-                            &dt_bias_f32,
+                            &self.dt_bias_f32,
                         )?;
                         let shape = b.shape();
                         (beta_flat.reshape(shape)?, g_flat.reshape(shape)?)
@@ -1095,16 +1118,9 @@ impl GatedDeltaNet {
     fn compute_beta_g_cpu(&self, b: &Tensor, a: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
         let beta = hanzo_nn::ops::sigmoid(b)?;
         let a_f = a.to_dtype(DType::F32)?;
-        let dt_bias_expanded = self
-            .dt_bias
-            .to_dtype(DType::F32)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?;
+        let dt_bias_expanded = self.dt_bias_f32.unsqueeze(0)?.unsqueeze(0)?;
         let g = self
-            .a_log
-            .to_dtype(DType::F32)?
-            .exp()?
-            .neg()?
+            .neg_exp_a
             .unsqueeze(0)?
             .unsqueeze(0)?
             .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?
@@ -1491,11 +1507,15 @@ mod tests {
         let out_w = synthetic(hidden * value_dim, 9, &dev)?.reshape((hidden, value_dim))?;
 
         let build = |in_proj: GdnInProj| -> Result<GatedDeltaNet> {
+            let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+            let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
             Ok(GatedDeltaNet {
                 in_proj,
                 conv1d_weight: conv1d_weight.clone(),
                 dt_bias: dt_bias.clone(),
+                dt_bias_f32,
                 a_log: a_log.clone(),
+                neg_exp_a,
                 norm: RmsNormGated::from_weight(norm_weight.clone(), 1e-6),
                 out_proj: unquant(out_w.clone())?,
                 num_k_heads,
@@ -1573,6 +1593,10 @@ mod tests {
             .reshape((key_dim * 2 + value_dim * 2, hidden))?;
         let ba_w =
             synthetic(num_v_heads * 2 * hidden, 32, &dev)?.reshape((num_v_heads * 2, hidden))?;
+        let dt_bias = synthetic(num_v_heads, 34, &dev)?;
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let a_log = synthetic(num_v_heads, 35, &dev)?;
+        let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
         let gdn = GatedDeltaNet {
             in_proj: GdnInProj::Merged {
                 qkvz: Linear::new(qkvz_w, None),
@@ -1583,8 +1607,10 @@ mod tests {
                 1,
                 conv_kernel_size,
             ))?,
-            dt_bias: synthetic(num_v_heads, 34, &dev)?,
-            a_log: synthetic(num_v_heads, 35, &dev)?,
+            dt_bias,
+            dt_bias_f32,
+            a_log,
+            neg_exp_a,
             norm: RmsNormGated::from_weight(synthetic(head_v_dim, 36, &dev)?, 1e-6),
             out_proj: unquant(
                 synthetic(hidden * value_dim, 37, &dev)?.reshape((hidden, value_dim))?,
@@ -1660,6 +1686,10 @@ mod tests {
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
         let conv_dim = key_dim * 2 + value_dim;
+        let dt_bias = synthetic(num_v_heads, 54, dev)?;
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let a_log = synthetic(num_v_heads, 55, dev)?;
+        let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
         let gdn = GatedDeltaNet {
             in_proj: GdnInProj::Merged {
                 qkvz: Linear::new(
@@ -1678,8 +1708,10 @@ mod tests {
                 1,
                 conv_kernel_size,
             ))?,
-            dt_bias: synthetic(num_v_heads, 54, dev)?,
-            a_log: synthetic(num_v_heads, 55, dev)?,
+            dt_bias,
+            dt_bias_f32,
+            a_log,
+            neg_exp_a,
             norm: RmsNormGated::from_weight(synthetic(head_v_dim, 56, dev)?, 1e-6),
             out_proj: unquant(
                 synthetic(hidden * value_dim, 57, dev)?.reshape((hidden, value_dim))?,
@@ -2609,6 +2641,10 @@ mod tests {
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
         let conv_dim = key_dim * 2 + value_dim;
+        let dt_bias = synthetic(num_v_heads, 54, &dev)?;
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let a_log = synthetic(num_v_heads, 55, &dev)?;
+        let neg_exp_a = a_log.to_dtype(DType::F32)?.exp()?.neg()?.contiguous()?;
         let gdn = GatedDeltaNet {
             in_proj: GdnInProj::Merged {
                 qkvz: Linear::new(
@@ -2627,8 +2663,10 @@ mod tests {
             conv1d_weight: (synthetic(conv_dim * conv_kernel_size, 53, &dev)? * 0.2)?
                 .to_dtype(DType::F16)?
                 .reshape((conv_dim, 1, conv_kernel_size))?,
-            dt_bias: synthetic(num_v_heads, 54, &dev)?,
-            a_log: synthetic(num_v_heads, 55, &dev)?,
+            dt_bias,
+            dt_bias_f32,
+            a_log,
+            neg_exp_a,
             norm: RmsNormGated::from_weight(
                 synthetic(head_v_dim, 56, &dev)?.to_dtype(DType::F16)?,
                 1e-6,

@@ -12,10 +12,168 @@
 //! leaving KV pages and GDN/Conv1D state out of sync.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use hanzo_ml::{Result, Tensor};
+use serde::{Deserialize, Serialize};
 
-use super::{HybridCache, HybridLayerCache, KvCacheSnapshot, RecurrentStateSnapshot};
+use super::{
+    HybridCache, HybridLayerCache, KvCache, KvCacheSnapshot, NormalCache, RecurrentStateSnapshot,
+};
+use crate::models::gdn::{forward_pooled, GdnLayerCache, PoolSlots};
+use crate::models::replay_gdn::{
+    GdnStepInputs, ReplayGdnConfig, ReplayGdnMemoryStats, ReplayGdnPool, ReplayLayerDims,
+    ReplaySlotSnapshot,
+};
+
+/// Step arguments for executing a GDN layer under [`HybridStateContract`].
+pub struct HybridReplayStep<'a> {
+    pub request_id: usize,
+    pub layer_idx: usize,
+    pub conv_in: Option<&'a Tensor>,
+    pub inputs: GdnStepInputs<'a>,
+    pub stage_speculative: bool,
+}
+
+const PROVENANCE_DOMAIN_TAG: &[u8] = b"hanzo.hybrid_prefix_provenance.v1";
+const CHAIN_DOMAIN_TAG: &[u8] = b"hanzo.hybrid_prefix_chain.v1";
+
+/// Tenant, model, and LoRA adapter identity isolating hybrid prefix cache entries.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CacheProvenance {
+    pub cache_salt: Option<String>,
+    pub model_id: String,
+    pub adapter_id: Option<String>,
+}
+
+impl CacheProvenance {
+    pub fn new(cache_salt: Option<&str>, model_id: &str, adapter_id: Option<&str>) -> Self {
+        Self {
+            cache_salt: cache_salt.map(str::to_owned),
+            model_id: model_id.to_owned(),
+            adapter_id: adapter_id.map(str::to_owned),
+        }
+    }
+
+    /// Length-prefixed domain-separated digest preventing field-boundary collisions.
+    pub fn isolation_digest(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        PROVENANCE_DOMAIN_TAG.hash(&mut h);
+        match &self.cache_salt {
+            Some(s) => {
+                1u8.hash(&mut h);
+                s.len().hash(&mut h);
+                s.as_bytes().hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        self.model_id.len().hash(&mut h);
+        self.model_id.as_bytes().hash(&mut h);
+        match &self.adapter_id {
+            Some(a) => {
+                1u8.hash(&mut h);
+                a.len().hash(&mut h);
+                a.as_bytes().hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        h.finish()
+    }
+
+    pub fn token_chain_digest(&self, tokens: &[u32]) -> u64 {
+        let mut h = DefaultHasher::new();
+        CHAIN_DOMAIN_TAG.hash(&mut h);
+        self.isolation_digest().hash(&mut h);
+        tokens.len().hash(&mut h);
+        tokens.hash(&mut h);
+        h.finish()
+    }
+}
+
+/// Detached hybrid prefix checkpoint owning KV tensors, GDN recurrent state, and Conv1D history.
+#[derive(Clone, Debug)]
+pub struct HybridPrefixCheckpoint {
+    pub provenance: CacheProvenance,
+    pub tokens: Vec<u32>,
+    pub token_len: usize,
+    pub chain_digest: u64,
+    pub kv_layers: Vec<Option<KvCache>>,
+    pub paged_block_prefix: Vec<u32>,
+    pub recurrent_snapshots: Vec<RecurrentStateSnapshot>,
+    pub kv_bytes: usize,
+    pub recurrent_bytes: usize,
+}
+
+impl HybridPrefixCheckpoint {
+    pub fn total_bytes(&self) -> usize {
+        self.kv_bytes + self.recurrent_bytes
+    }
+}
+
+fn clone_detached_kv_layer(
+    layer: &KvCache,
+    active_len: usize,
+    headroom: usize,
+) -> Result<(KvCache, usize)> {
+    match layer {
+        KvCache::Normal { k, v } => {
+            let mut cloned = layer.clone();
+            let mut bytes = 0usize;
+            if let KvCache::Normal { k: ck, v: cv } = &mut cloned {
+                if let Some(kd) = k.all_data.as_ref() {
+                    let prefix = kd.narrow(k.dim, 0, active_len)?.contiguous()?;
+                    let cap = (active_len + headroom).min(k.max_seq_len).max(active_len);
+                    let mut shape = prefix.dims().to_vec();
+                    shape[k.dim] = cap;
+                    let buf = Tensor::zeros(shape, prefix.dtype(), prefix.device())?;
+                    if active_len > 0 {
+                        buf.slice_set(&prefix, k.dim, 0)?;
+                    }
+                    bytes += active_len * prefix.dims().iter().product::<usize>()
+                        / active_len.max(1)
+                        * prefix.dtype().size_in_bytes();
+                    ck.all_data = Some(buf);
+                    ck.current_seq_len = active_len;
+                    ck.capacity_seq_len = cap;
+                }
+                if let Some(vd) = v.all_data.as_ref() {
+                    let prefix = vd.narrow(v.dim, 0, active_len)?.contiguous()?;
+                    let cap = (active_len + headroom).min(v.max_seq_len).max(active_len);
+                    let mut shape = prefix.dims().to_vec();
+                    shape[v.dim] = cap;
+                    let buf = Tensor::zeros(shape, prefix.dtype(), prefix.device())?;
+                    if active_len > 0 {
+                        buf.slice_set(&prefix, v.dim, 0)?;
+                    }
+                    bytes += active_len * prefix.dims().iter().product::<usize>()
+                        / active_len.max(1)
+                        * prefix.dtype().size_in_bytes();
+                    cv.all_data = Some(buf);
+                    cv.current_seq_len = active_len;
+                    cv.capacity_seq_len = cap;
+                }
+            }
+            Ok((cloned, bytes))
+        }
+        KvCache::Rotating { k, v } => {
+            let mut cloned = layer.clone();
+            let mut bytes = 0usize;
+            if let KvCache::Rotating { k: ck, v: cv } = &mut cloned {
+                if let Some(kd) = k.all_data.as_ref() {
+                    bytes += kd.elem_count() * kd.dtype().size_in_bytes();
+                    ck.all_data = Some(kd.copy()?);
+                }
+                if let Some(vd) = v.all_data.as_ref() {
+                    bytes += vd.elem_count() * vd.dtype().size_in_bytes();
+                    cv.all_data = Some(vd.copy()?);
+                }
+                cloned.set_len(active_len)?;
+            }
+            Ok((cloned, bytes))
+        }
+        KvCache::Shared { owner } => Ok((KvCache::Shared { owner: *owner }, 0)),
+    }
+}
 
 /// Immutable, deep-copied snapshot of a request's complete hybrid execution state.
 #[derive(Debug, Clone)]
@@ -28,6 +186,8 @@ pub struct HybridStateCheckpoint {
     pub paged_block_prefix: Vec<u32>,
     /// Deep-copied GDN/Mamba/conv-only snapshots across every recurrent pool in `HybridCache`.
     pub recurrent_snapshots: Vec<RecurrentStateSnapshot>,
+    /// CoW ReplayGDN slot snapshots aligned with `HybridCache::caches` when ReplayGDN is active.
+    pub replay_snapshots: Vec<Option<ReplaySlotSnapshot>>,
 }
 
 /// Per-request binding tracked by [`HybridStateContract`].
@@ -43,14 +203,60 @@ pub struct HybridRequestBinding {
 pub struct HybridStateContract {
     pub cache: HybridCache,
     bindings: HashMap<usize, HybridRequestBinding>,
+    replay_config: ReplayGdnConfig,
+    replay_pools: Vec<Option<ReplayGdnPool>>,
 }
 
 impl HybridStateContract {
     pub fn new(cache: HybridCache) -> Self {
+        Self::with_replay_gdn(cache, ReplayGdnConfig::from_env())
+    }
+
+    pub fn with_replay_gdn(cache: HybridCache, replay_config: ReplayGdnConfig) -> Self {
+        let replay_pools = cache
+            .caches
+            .iter()
+            .map(|layer| {
+                if !replay_config.enabled {
+                    return None;
+                }
+                let HybridLayerCache::Recurrent(pool) = layer else {
+                    return None;
+                };
+                let cfg = pool.config();
+                if cfg.state_dims.len() != 3 {
+                    return None;
+                }
+                let dims = ReplayLayerDims {
+                    num_v_heads: cfg.state_dims[0],
+                    head_k_dim: cfg.state_dims[1],
+                    head_v_dim: cfg.state_dims[2],
+                    conv_dim: cfg.conv_dim,
+                    conv_width: cfg.conv_width,
+                };
+                Some(ReplayGdnPool::new(dims, replay_config))
+            })
+            .collect();
         Self {
             cache,
             bindings: HashMap::new(),
+            replay_config,
+            replay_pools,
         }
+    }
+
+    pub const fn replay_config(&self) -> ReplayGdnConfig {
+        self.replay_config
+    }
+
+    pub const fn replay_enabled(&self) -> bool {
+        self.replay_config.enabled
+    }
+
+    pub fn replay_layer_stats(&self, layer_idx: usize) -> Option<ReplayGdnMemoryStats> {
+        self.replay_pools
+            .get(layer_idx)
+            .and_then(|p| p.as_ref().map(ReplayGdnPool::stats))
     }
 
     /// Allocate a unified hybrid slot for `request_id` (GDN/Conv1D pool slot + empty KV binding).
@@ -63,6 +269,9 @@ impl HybridStateContract {
                 "HybridStateContract: failed to allocate recurrent slot for req {request_id}"
             );
         };
+        for rpool in self.replay_pools.iter_mut().flatten() {
+            rpool.allocate_at(slot);
+        }
         self.bindings.insert(
             request_id,
             HybridRequestBinding {
@@ -99,39 +308,117 @@ impl HybridStateContract {
         Ok(())
     }
 
+    /// Execute one GDN layer step through ReplayGDN when enabled or authoritative F32 pool otherwise.
+    pub fn forward_gdn_layer(&mut self, step: &HybridReplayStep<'_>) -> Result<Tensor> {
+        let slot = self
+            .bindings
+            .get(&step.request_id)
+            .ok_or_else(|| hanzo_ml::Error::Msg(format!("unknown request_id {}", step.request_id)))?
+            .recurrent_slot;
+
+        if let Some(Some(rpool)) = self.replay_pools.get_mut(step.layer_idx) {
+            let out =
+                rpool.forward_slot(slot, step.conv_in, &step.inputs, step.stage_speculative)?;
+            let new_off = rpool.seqlen_offset(slot);
+            if let Some(pool) = self
+                .cache
+                .get_mut(step.layer_idx)
+                .and_then(HybridLayerCache::as_recurrent_pool_mut)
+            {
+                pool.set_seqlen_offset(slot, new_off);
+            }
+            return Ok(out);
+        }
+
+        let dev = step.inputs.q.device().clone();
+        #[allow(clippy::cast_possible_truncation)]
+        let slot_t = Tensor::from_vec(vec![slot as u32], (1,), &dev)?;
+        let pool = self
+            .cache
+            .get_mut(step.layer_idx)
+            .and_then(HybridLayerCache::as_recurrent_pool_mut)
+            .ok_or_else(|| {
+                hanzo_ml::Error::Msg(format!("layer {} is not a recurrent pool", step.layer_idx))
+            })?;
+        let conv_k = pool.config().conv_width;
+        forward_pooled(
+            pool,
+            PoolSlots::Many(&slot_t),
+            step.layer_idx,
+            step.stage_speculative,
+            |cache: &mut GdnLayerCache| {
+                let seq_len = step.inputs.q.dim(1)?;
+                if let Some(conv_in) = step.conv_in {
+                    cache.trail_conv(conv_in)?;
+                    let window = Tensor::cat(&[&cache.conv_state, &conv_in.transpose(1, 2)?], 2)?;
+                    cache.conv_state = window.narrow(2, seq_len, conv_k)?.contiguous()?;
+                }
+                let y = cache.recurrence(
+                    step.inputs.q,
+                    step.inputs.k,
+                    step.inputs.v,
+                    step.inputs.g,
+                    step.inputs.beta,
+                )?;
+                cache.seqlen_offset += seq_len;
+                Ok(y)
+            },
+        )
+    }
+
     /// Atomically snapshot KV layers, paged block prefix, GDN recurrent state, and Conv1D history.
-    ///
-    /// Every tensor inside the returned [`HybridStateCheckpoint`] is deep-copied (`copy()`), so
-    /// subsequent in-place decode steps cannot alias or mutate the checkpoint.
     pub fn snapshot_request(&self, request_id: usize) -> Result<HybridStateCheckpoint> {
         let binding = self
             .bindings
             .get(&request_id)
             .ok_or_else(|| hanzo_ml::Error::Msg(format!("unknown request_id {request_id}")))?;
+        let slot = binding.recurrent_slot;
 
-        let raw_rec = self
-            .cache
-            .snapshot_recurrent_state(binding.recurrent_slot)?;
-        let mut recurrent_snapshots = Vec::with_capacity(raw_rec.len());
-        for snap in raw_rec {
-            recurrent_snapshots.push(RecurrentStateSnapshot {
-                conv_state: snap.conv_state.copy()?,
-                recurrent_state: snap.recurrent_state.copy()?,
-                seqlen_offset: snap.seqlen_offset,
-            });
-        }
-
+        let raw_rec = self.cache.snapshot_recurrent_state(slot)?;
+        let mut raw_iter = raw_rec.into_iter();
+        let mut recurrent_snapshots = Vec::new();
+        let mut replay_snapshots = Vec::with_capacity(self.cache.caches.len());
         let mut kv_snapshots = Vec::with_capacity(self.cache.caches.len());
-        for layer in &self.cache.caches {
+
+        for (idx, layer) in self.cache.caches.iter().enumerate() {
             match layer {
-                HybridLayerCache::Attention(kv) => kv_snapshots.push(Some(kv.snapshot()?)),
-                HybridLayerCache::Recurrent(_) => kv_snapshots.push(None),
+                HybridLayerCache::Attention(kv) => {
+                    kv_snapshots.push(Some(kv.snapshot()?));
+                    replay_snapshots.push(None);
+                }
+                HybridLayerCache::Recurrent(pool) => {
+                    kv_snapshots.push(None);
+                    let raw = raw_iter.next().ok_or_else(|| {
+                        hanzo_ml::Error::Msg("missing recurrent snapshot entry".into())
+                    })?;
+                    if let Some(Some(rpool)) = self.replay_pools.get(idx) {
+                        let (conv_t, rec_t, off) = rpool.materialize_slot_tensors(
+                            slot,
+                            pool.device(),
+                            pool.config().conv_dtype,
+                            pool.config().state_dtype,
+                        )?;
+                        recurrent_snapshots.push(RecurrentStateSnapshot {
+                            conv_state: conv_t,
+                            recurrent_state: rec_t,
+                            seqlen_offset: off,
+                        });
+                        replay_snapshots.push(Some(rpool.snapshot_slot(slot)?));
+                    } else {
+                        recurrent_snapshots.push(RecurrentStateSnapshot {
+                            conv_state: raw.conv_state.copy()?,
+                            recurrent_state: raw.recurrent_state.copy()?,
+                            seqlen_offset: raw.seqlen_offset,
+                        });
+                        replay_snapshots.push(None);
+                    }
+                }
             }
         }
 
         let token_len = self
             .cache
-            .recurrent_offset(binding.recurrent_slot)
+            .recurrent_offset(slot)
             .unwrap_or(binding.context_len);
 
         Ok(HybridStateCheckpoint {
@@ -139,11 +426,11 @@ impl HybridStateContract {
             kv_snapshots,
             paged_block_prefix: binding.paged_block_table.clone(),
             recurrent_snapshots,
+            replay_snapshots,
         })
     }
 
-    /// Atomically restore KV layers, paged block prefix, GDN recurrent state, and Conv1D history
-    /// for `request_id` from `ckpt`.
+    /// Atomically restore KV layers, paged block prefix, GDN recurrent state, and Conv1D history.
     pub fn restore_request(
         &mut self,
         request_id: usize,
@@ -155,7 +442,6 @@ impl HybridStateContract {
             .ok_or_else(|| hanzo_ml::Error::Msg(format!("unknown request_id {request_id}")))?
             .recurrent_slot;
 
-        // Deep-copy on restore as well so the checkpoint remains reusable across multiple forks.
         let mut rec_copy = Vec::with_capacity(ckpt.recurrent_snapshots.len());
         for snap in &ckpt.recurrent_snapshots {
             rec_copy.push(RecurrentStateSnapshot {
@@ -165,6 +451,12 @@ impl HybridStateContract {
             });
         }
         self.cache.restore_recurrent_state(slot, &rec_copy)?;
+
+        for (idx, rsnap_opt) in ckpt.replay_snapshots.iter().enumerate() {
+            if let (Some(Some(rpool)), Some(rsnap)) = (self.replay_pools.get_mut(idx), rsnap_opt) {
+                rpool.restore_slot(slot, rsnap)?;
+            }
+        }
 
         for (layer, kv_snap) in self.cache.caches.iter_mut().zip(&ckpt.kv_snapshots) {
             if let (HybridLayerCache::Attention(kv), Some(snap)) = (layer, kv_snap) {
@@ -190,8 +482,7 @@ impl HybridStateContract {
         Ok(())
     }
 
-    /// Prefix reuse: snapshot `src_request_id` and materialize an independent clone into
-    /// `dst_request_id` (new recurrent slot + copied GDN/Conv1D state + shared prefix block list).
+    /// Prefix reuse: snapshot `src_request_id` and materialize an independent clone into `dst_request_id`.
     pub fn fork_prefix(
         &mut self,
         src_request_id: usize,
@@ -209,6 +500,11 @@ impl HybridStateContract {
             });
         }
         self.cache.restore_recurrent_state(dst_slot, &rec_copy)?;
+        for (idx, rsnap_opt) in ckpt.replay_snapshots.iter().enumerate() {
+            if let (Some(Some(rpool)), Some(rsnap)) = (self.replay_pools.get_mut(idx), rsnap_opt) {
+                rpool.restore_slot(dst_slot, rsnap)?;
+            }
+        }
         if let Some(dst) = self.bindings.get_mut(&dst_request_id) {
             dst.paged_block_table = ckpt.paged_block_prefix.clone();
             dst.context_len = ckpt.token_len;
@@ -216,12 +512,61 @@ impl HybridStateContract {
         Ok(ckpt)
     }
 
-    /// Atomic speculative verification rollback across KV caches, paged context lengths, AND
-    /// every GDN/conv-only pool.
-    ///
-    /// - `keep_len`: accepted sequence length (must match `post_verify_offset - rejected`),
-    /// - `rejected`: number of rejected draft positions to rewind via the recorded `RecurrentTrail`,
-    /// - `block_size`: optional paged KV block size for trimming unused tail blocks.
+    /// Copy-on-Write ReplayGDN prefix fork copying 0 checkpoint bytes when ReplayGDN is enabled.
+    pub fn fork_prefix_cow(
+        &mut self,
+        src_request_id: usize,
+        dst_request_id: usize,
+    ) -> Result<usize> {
+        let (src_slot, paged_prefix, ctx_len) = {
+            let src = self.bindings.get(&src_request_id).ok_or_else(|| {
+                hanzo_ml::Error::Msg(format!("unknown request_id {src_request_id}"))
+            })?;
+            (
+                src.recurrent_slot,
+                src.paged_block_table.clone(),
+                src.context_len,
+            )
+        };
+        let token_len = self.cache.recurrent_offset(src_slot).unwrap_or(ctx_len);
+        let dst_slot = self.allocate_request(dst_request_id)?;
+
+        for (idx, layer) in self.cache.caches.iter_mut().enumerate() {
+            if let HybridLayerCache::Recurrent(pool) = layer {
+                if let Some(Some(rpool)) = self.replay_pools.get_mut(idx) {
+                    let snap = rpool.fork_slot(src_slot, dst_slot)?;
+                    pool.set_seqlen_offset(dst_slot, snap.seqlen_offset());
+                } else {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let src_t = Tensor::from_vec(vec![src_slot as u32], (1,), pool.device())?;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let dst_t = Tensor::from_vec(vec![dst_slot as u32], (1,), pool.device())?;
+                    let c = pool.gather_conv_state(&src_t)?;
+                    let r = pool.gather_recurrent_state(&src_t)?;
+                    pool.scatter_conv_state(&dst_t, &c)?;
+                    pool.scatter_recurrent_state(&dst_t, &r)?;
+                    pool.set_seqlen_offset(dst_slot, pool.get_seqlen_offset(src_slot));
+                }
+            }
+        }
+        if let Some(dst) = self.bindings.get_mut(&dst_request_id) {
+            dst.paged_block_table = paged_prefix;
+            dst.context_len = token_len;
+        }
+        Ok(dst_slot)
+    }
+
+    /// Commit 100% accepted speculative verify tokens (`rejected == 0`).
+    pub fn commit_speculative(
+        &mut self,
+        request_id: usize,
+        keep_len: usize,
+        block_size: Option<usize>,
+    ) -> Result<()> {
+        self.rollback_speculative(request_id, keep_len, 0, block_size)
+    }
+
+    /// Atomic speculative verification commit and rollback across KV, paged blocks, and GDN pools.
     pub fn rollback_speculative(
         &mut self,
         request_id: usize,
@@ -235,10 +580,17 @@ impl HybridStateContract {
             .ok_or_else(|| hanzo_ml::Error::Msg(format!("unknown request_id {request_id}")))?
             .recurrent_slot;
 
-        // 1. Rewind every recurrent + conv-only pool atomically.
-        self.cache.rewind_recurrent(slot, rejected)?;
+        for (idx, layer) in self.cache.caches.iter_mut().enumerate() {
+            if let HybridLayerCache::Recurrent(pool) = layer {
+                if let Some(Some(rpool)) = self.replay_pools.get_mut(idx) {
+                    rpool.commit_or_rollback_slot(slot, keep_len, rejected)?;
+                    pool.set_seqlen_offset(slot, rpool.seqlen_offset(slot));
+                } else {
+                    pool.rewind(slot, rejected)?;
+                }
+            }
+        }
 
-        // 2. Verify recurrent offset invariant matches `keep_len`.
         if let Some(off) = self.cache.recurrent_offset(slot) {
             if off != keep_len {
                 hanzo_ml::bail!(
@@ -247,14 +599,12 @@ impl HybridStateContract {
             }
         }
 
-        // 3. Trim contiguous KV attention caches to `keep_len`.
         for layer in &mut self.cache.caches {
             if let HybridLayerCache::Attention(kv) = layer {
                 kv.set_len(keep_len)?;
             }
         }
 
-        // 4. Trim paged KV context length and tail blocks.
         if let Some(binding) = self.bindings.get_mut(&request_id) {
             binding.context_len = keep_len;
             if let Some(bs) = block_size {
@@ -273,6 +623,9 @@ impl HybridStateContract {
         if let Some(binding) = self.bindings.remove(&request_id) {
             self.cache.reset_seq(binding.recurrent_slot)?;
             self.cache.free_seq(binding.recurrent_slot);
+            for rpool in self.replay_pools.iter_mut().flatten() {
+                rpool.free_slot(binding.recurrent_slot);
+            }
         }
         if self.bindings.is_empty() {
             for layer in &mut self.cache.caches {
@@ -284,7 +637,7 @@ impl HybridStateContract {
         Ok(())
     }
 
-    /// Helper returning the `(conv_state, recurrent_state)` tensors for `request_id` at layer `layer_idx`.
+    /// Helper returning the `(conv_state, recurrent_state, seqlen_offset)` for `request_id` at `layer_idx`.
     pub fn inspect_recurrent_layer(
         &self,
         request_id: usize,
@@ -301,12 +654,133 @@ impl HybridStateContract {
             .ok_or_else(|| {
                 hanzo_ml::Error::Msg(format!("layer {layer_idx} is not a recurrent pool"))
             })?;
-        let idx = Tensor::from_vec(vec![binding.recurrent_slot as u32], (1,), pool.device())?;
+        if let Some(Some(rpool)) = self.replay_pools.get(layer_idx) {
+            return rpool.materialize_slot_tensors(
+                binding.recurrent_slot,
+                pool.device(),
+                pool.config().conv_dtype,
+                pool.config().state_dtype,
+            );
+        }
+        let slot_u32 = u32::try_from(binding.recurrent_slot)
+            .map_err(|_| hanzo_ml::Error::Msg("recurrent_slot exceeds u32".into()))?;
+        let idx = Tensor::from_vec(vec![slot_u32], (1,), pool.device())?;
         Ok((
             pool.gather_conv_state(&idx)?,
             pool.gather_recurrent_state(&idx)?,
             pool.get_seqlen_offset(binding.recurrent_slot),
         ))
+    }
+
+    /// Export a detached prefix checkpoint owning KV, GDN recurrent state, and Conv1D history.
+    pub fn export_prefix_checkpoint(
+        &self,
+        request_id: usize,
+        provenance: CacheProvenance,
+        tokens: &[u32],
+    ) -> Result<HybridPrefixCheckpoint> {
+        let binding = self
+            .bindings
+            .get(&request_id)
+            .ok_or_else(|| hanzo_ml::Error::Msg(format!("unknown request_id {request_id}")))?;
+        let token_len = self
+            .cache
+            .recurrent_offset(binding.recurrent_slot)
+            .unwrap_or(binding.context_len);
+        if tokens.len() != token_len {
+            hanzo_ml::bail!(
+                "export_prefix_checkpoint: token slice len {} != state offset {token_len}",
+                tokens.len()
+            );
+        }
+
+        let raw_rec = self
+            .cache
+            .snapshot_recurrent_state(binding.recurrent_slot)?;
+        let mut recurrent_snapshots = Vec::with_capacity(raw_rec.len());
+        let mut recurrent_bytes = 0usize;
+        for snap in raw_rec {
+            if snap.seqlen_offset != token_len {
+                hanzo_ml::bail!(
+                    "export_prefix_checkpoint: non-uniform recurrent offset {} != {token_len}",
+                    snap.seqlen_offset
+                );
+            }
+            recurrent_snapshots.push(RecurrentStateSnapshot {
+                conv_state: snap.conv_state.copy()?,
+                recurrent_state: snap.recurrent_state.copy()?,
+                seqlen_offset: snap.seqlen_offset,
+            });
+            if let Some(last) = recurrent_snapshots.last() {
+                recurrent_bytes += last.bytes();
+            }
+        }
+
+        let mut kv_layers = Vec::with_capacity(self.cache.caches.len());
+        let mut kv_bytes = 0usize;
+        for layer in &self.cache.caches {
+            match layer {
+                HybridLayerCache::Attention(kv) => {
+                    let (detached, bytes) = clone_detached_kv_layer(kv, token_len, 0)?;
+                    kv_bytes += bytes;
+                    kv_layers.push(Some(detached));
+                }
+                HybridLayerCache::Recurrent(_) => kv_layers.push(None),
+            }
+        }
+
+        let chain_digest = provenance.token_chain_digest(tokens);
+        Ok(HybridPrefixCheckpoint {
+            provenance,
+            tokens: tokens.to_vec(),
+            token_len,
+            chain_digest,
+            kv_layers,
+            paged_block_prefix: binding.paged_block_table.clone(),
+            recurrent_snapshots,
+            kv_bytes,
+            recurrent_bytes,
+        })
+    }
+
+    /// Restore a detached prefix checkpoint into `request_id` with fresh KV growth headroom.
+    pub fn import_prefix_checkpoint(
+        &mut self,
+        request_id: usize,
+        ckpt: &HybridPrefixCheckpoint,
+    ) -> Result<usize> {
+        if ckpt.kv_layers.len() != self.cache.caches.len() {
+            hanzo_ml::bail!(
+                "import_prefix_checkpoint: layer count {} != {}",
+                ckpt.kv_layers.len(),
+                self.cache.caches.len()
+            );
+        }
+        let slot = self.allocate_request(request_id)?;
+
+        let mut rec_copy = Vec::with_capacity(ckpt.recurrent_snapshots.len());
+        for snap in &ckpt.recurrent_snapshots {
+            rec_copy.push(RecurrentStateSnapshot {
+                conv_state: snap.conv_state.copy()?,
+                recurrent_state: snap.recurrent_state.copy()?,
+                seqlen_offset: snap.seqlen_offset,
+            });
+        }
+        self.cache.restore_recurrent_state(slot, &rec_copy)?;
+
+        for (layer, saved_kv) in self.cache.caches.iter_mut().zip(&ckpt.kv_layers) {
+            if let (HybridLayerCache::Attention(dst_kv), Some(src_kv)) = (layer, saved_kv) {
+                let (fresh_kv, _) =
+                    clone_detached_kv_layer(src_kv, ckpt.token_len, NormalCache::CACHE_GROW_SIZE)?;
+                *dst_kv = fresh_kv;
+            }
+        }
+
+        if let Some(binding) = self.bindings.get_mut(&request_id) {
+            binding.paged_block_table = ckpt.paged_block_prefix.clone();
+            binding.context_len = ckpt.token_len;
+        }
+        Ok(ckpt.token_len)
     }
 }
 
@@ -781,6 +1255,287 @@ mod tests {
         assert!(active.k()?.is_none());
         // Seq A's saved cache remains completely intact after active.reset()
         assert_eq!(seq_a.current_seq_len(), 7);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_contract_replay_gdn_lifecycle_across_windows() -> Result<()> {
+        let dev = Device::Cpu;
+        let (n_heads, n_kv, kd, vd, conv_dim, conv_k, block_size) =
+            (4usize, 2usize, 128usize, 128usize, 16usize, 4usize, 4usize);
+        let make_contract = |replay_cfg: ReplayGdnConfig| -> Result<HybridStateContract> {
+            let rec_cfg = RecurrentLayerConfig {
+                conv_dim,
+                conv_width: conv_k,
+                state_dims: vec![n_heads, kd, vd],
+                conv_dtype: DType::F32,
+                state_dtype: DType::F32,
+            };
+            let cfg = HybridCacheConfig::uniform(
+                vec![HybridLayerType::Recurrent, HybridLayerType::Attention],
+                256,
+                rec_cfg,
+            );
+            Ok(HybridStateContract::with_replay_gdn(
+                HybridCache::new(cfg, &dev)?,
+                replay_cfg,
+            ))
+        };
+
+        // Default contract preserves authoritative F32 reference (replay disabled).
+        let default_contract = HybridStateContract::new(HybridCache::new(
+            HybridCacheConfig::uniform(
+                vec![HybridLayerType::Recurrent],
+                64,
+                RecurrentLayerConfig {
+                    conv_dim,
+                    conv_width: conv_k,
+                    state_dims: vec![n_heads, kd, vd],
+                    conv_dtype: DType::F32,
+                    state_dtype: DType::F32,
+                },
+            ),
+            &dev,
+        )?);
+        assert!(!default_contract.replay_enabled());
+
+        let total_seq = 48usize;
+        let conv_s = seeded(&[1, total_seq, conv_dim], 111, 0.5, &dev)?;
+        let q_s = seeded(&[1, total_seq, n_heads, kd], 112, 0.25, &dev)?;
+        let k_s = crate::models::gdn::l2_norm(
+            &seeded(&[1, total_seq, n_heads, kd], 113, 0.5, &dev)?,
+            1e-6,
+        )?;
+        let v_s = seeded(&[1, total_seq, n_heads, vd], 114, 0.3, &dev)?;
+        let g_s = (seeded(&[1, total_seq, n_heads], 115, 0.25, &dev)? - 0.35)?;
+        let b_s = ((seeded(&[1, total_seq, n_heads], 116, 0.4, &dev)? + 1.0)? * 0.5)?;
+        let aq_s = seeded(&[1, n_heads, total_seq, kd], 117, 0.3, &dev)?;
+        let ak_s = seeded(&[1, n_kv, total_seq, kd], 118, 0.3, &dev)?;
+        let av_s = seeded(&[1, n_kv, total_seq, kd], 119, 0.3, &dev)?;
+
+        let run_step = |contract: &mut HybridStateContract,
+                        req_id: usize,
+                        c_in: &Tensor,
+                        q_in: &Tensor,
+                        k_in: &Tensor,
+                        v_in: &Tensor,
+                        g_in: &Tensor,
+                        b_in: &Tensor,
+                        aq_in: &Tensor,
+                        ak_in: &Tensor,
+                        av_in: &Tensor,
+                        stage: bool|
+         -> Result<(Tensor, Tensor)> {
+            let yg = contract.forward_gdn_layer(&HybridReplayStep {
+                request_id: req_id,
+                layer_idx: 0,
+                conv_in: Some(c_in),
+                inputs: GdnStepInputs {
+                    q: q_in,
+                    k: k_in,
+                    v: v_in,
+                    g: g_in,
+                    beta: b_in,
+                },
+                stage_speculative: stage,
+            })?;
+            let kv = contract
+                .cache
+                .get_mut(1)
+                .and_then(HybridLayerCache::as_kv_cache_mut)
+                .expect("layer 1 attention");
+            let (fk, fv) = kv.append(ak_in, av_in)?;
+            let params = SdpaParams {
+                n_kv_groups: n_heads / n_kv,
+                softcap: None,
+                softmax_scale: 1.0 / (kd as f32).sqrt(),
+                sliding_window: None,
+                sinks: None,
+            };
+            let mask = if aq_in.dim(2)? > 1 {
+                AttentionMask::CausalFlash
+            } else {
+                AttentionMask::None
+            };
+            let ya = Sdpa.run_attention(aq_in, &fk, &fv, &mask, None, &params)?;
+            let slot = contract.binding(req_id).unwrap().recurrent_slot;
+            let new_len = contract.cache.recurrent_offset(slot).unwrap();
+            let blocks: Vec<u32> = (0..new_len.div_ceil(block_size) as u32)
+                .map(|i| 200 + i)
+                .collect();
+            contract.update_paged_kv(req_id, blocks, new_len)?;
+            Ok((yg, ya))
+        };
+
+        // Ground truth with authoritative F32 reference contract.
+        let mut ground = make_contract(ReplayGdnConfig::disabled())?;
+        ground.allocate_request(1)?;
+        let (yg_pre, _) = run_step(
+            &mut ground,
+            1,
+            &conv_s.narrow(1, 0, 7)?,
+            &q_s.narrow(1, 0, 7)?,
+            &k_s.narrow(1, 0, 7)?,
+            &v_s.narrow(1, 0, 7)?,
+            &g_s.narrow(1, 0, 7)?,
+            &b_s.narrow(1, 0, 7)?,
+            &aq_s.narrow(2, 0, 7)?,
+            &ak_s.narrow(2, 0, 7)?,
+            &av_s.narrow(2, 0, 7)?,
+            false,
+        )?;
+        let mut ground_yg = vec![yg_pre];
+        for t in 7..total_seq {
+            let (yg, _) = run_step(
+                &mut ground,
+                1,
+                &conv_s.narrow(1, t, 1)?,
+                &q_s.narrow(1, t, 1)?,
+                &k_s.narrow(1, t, 1)?,
+                &v_s.narrow(1, t, 1)?,
+                &g_s.narrow(1, t, 1)?,
+                &b_s.narrow(1, t, 1)?,
+                &aq_s.narrow(2, t, 1)?,
+                &ak_s.narrow(2, t, 1)?,
+                &av_s.narrow(2, t, 1)?,
+                false,
+            )?;
+            ground_yg.push(yg);
+        }
+        let ground_yg_all = Tensor::cat(&ground_yg, 1)?;
+        let (ground_conv_end, ground_rec_end, _) = ground.inspect_recurrent_layer(1, 0)?;
+
+        // ReplayGDN contract across windows {4, 8, 16, 32} with multi-round draft/verify/rollback + CoW fork.
+        for &win in &crate::models::replay_gdn::SUPPORTED_REPLAY_WINDOWS {
+            let mut spec = make_contract(ReplayGdnConfig::enabled(win))?;
+            assert!(spec.replay_enabled());
+            spec.allocate_request(1)?;
+
+            let (yg0, _) = run_step(
+                &mut spec,
+                1,
+                &conv_s.narrow(1, 0, 7)?,
+                &q_s.narrow(1, 0, 7)?,
+                &k_s.narrow(1, 0, 7)?,
+                &v_s.narrow(1, 0, 7)?,
+                &g_s.narrow(1, 0, 7)?,
+                &b_s.narrow(1, 0, 7)?,
+                &aq_s.narrow(2, 0, 7)?,
+                &ak_s.narrow(2, 0, 7)?,
+                &av_s.narrow(2, 0, 7)?,
+                false,
+            )?;
+            let mut got_yg = vec![yg0];
+
+            // CoW fork at offset 7 into request 2.
+            let _ = spec.fork_prefix_cow(1, 2)?;
+            let (fork_c_ref, fork_r_ref, fork_off_ref) = spec.inspect_recurrent_layer(1, 0)?;
+            assert_eq!(fork_off_ref, 7);
+
+            let mut pos = 7usize;
+            // Schedule of (verify_width, accepted_count): includes 1/4, 4/4 (100%), 1/5 (0% drafts), 3/5.
+            let rounds = [(4usize, 1usize), (4, 4), (5, 1), (5, 3), (4, 2)];
+            let mut r_idx = 0usize;
+            while pos < total_seq {
+                let rem = total_seq - pos;
+                let (vw, acc) = rounds[r_idx % rounds.len()];
+                if rem < vw {
+                    let (yg_tail, _) = run_step(
+                        &mut spec,
+                        1,
+                        &conv_s.narrow(1, pos, rem)?,
+                        &q_s.narrow(1, pos, rem)?,
+                        &k_s.narrow(1, pos, rem)?,
+                        &v_s.narrow(1, pos, rem)?,
+                        &g_s.narrow(1, pos, rem)?,
+                        &b_s.narrow(1, pos, rem)?,
+                        &aq_s.narrow(2, pos, rem)?,
+                        &ak_s.narrow(2, pos, rem)?,
+                        &av_s.narrow(2, pos, rem)?,
+                        false,
+                    )?;
+                    got_yg.push(yg_tail);
+                    break;
+                }
+                let rej = vw - acc;
+                let bad_c = seeded(&[1, rej.max(1), conv_dim], 500 + r_idx as u64, 0.8, &dev)?;
+                let bad_q = seeded(&[1, rej.max(1), n_heads, kd], 600 + r_idx as u64, 0.8, &dev)?;
+                let bad_k = crate::models::gdn::l2_norm(
+                    &seeded(&[1, rej.max(1), n_heads, kd], 700 + r_idx as u64, 0.8, &dev)?,
+                    1e-6,
+                )?;
+                let bad_v = seeded(&[1, rej.max(1), n_heads, vd], 800 + r_idx as u64, 0.8, &dev)?;
+                let bad_g =
+                    (seeded(&[1, rej.max(1), n_heads], 900 + r_idx as u64, 0.2, &dev)? - 0.3)?;
+                let bad_b =
+                    ((seeded(&[1, rej.max(1), n_heads], 1000 + r_idx as u64, 0.3, &dev)? + 1.0)?
+                        * 0.5)?;
+                let bad_aq = seeded(
+                    &[1, n_heads, rej.max(1), kd],
+                    1100 + r_idx as u64,
+                    0.8,
+                    &dev,
+                )?;
+                let bad_ak = seeded(&[1, n_kv, rej.max(1), kd], 1200 + r_idx as u64, 0.8, &dev)?;
+                let bad_av = seeded(&[1, n_kv, rej.max(1), kd], 1300 + r_idx as u64, 0.8, &dev)?;
+
+                let splice = |good: &Tensor, bad: &Tensor, dim: usize| -> Result<Tensor> {
+                    if rej == 0 {
+                        good.narrow(dim, pos, vw)?.contiguous()
+                    } else {
+                        Tensor::cat(
+                            &[&good.narrow(dim, pos, acc)?, &bad.narrow(dim, 0, rej)?],
+                            dim,
+                        )?
+                        .contiguous()
+                    }
+                };
+
+                let (yg_ver, _) = run_step(
+                    &mut spec,
+                    1,
+                    &splice(&conv_s, &bad_c, 1)?,
+                    &splice(&q_s, &bad_q, 1)?,
+                    &splice(&k_s, &bad_k, 1)?,
+                    &splice(&v_s, &bad_v, 1)?,
+                    &splice(&g_s, &bad_g, 1)?,
+                    &splice(&b_s, &bad_b, 1)?,
+                    &splice(&aq_s, &bad_aq, 2)?,
+                    &splice(&ak_s, &bad_ak, 2)?,
+                    &splice(&av_s, &bad_av, 2)?,
+                    true,
+                )?;
+
+                if rej == 0 {
+                    spec.commit_speculative(1, pos + acc, Some(block_size))?;
+                } else {
+                    spec.rollback_speculative(1, pos + acc, rej, Some(block_size))?;
+                }
+                got_yg.push(yg_ver.narrow(1, 0, acc)?);
+                pos += acc;
+                r_idx += 1;
+            }
+
+            let got_yg_all = Tensor::cat(&got_yg, 1)?;
+            let (spec_conv_end, spec_rec_end, spec_off_end) = spec.inspect_recurrent_layer(1, 0)?;
+            assert_eq!(spec_off_end, total_seq);
+            assert!(rel_err(&got_yg_all, &ground_yg_all)? < 1e-5);
+            assert!(rel_err(&spec_conv_end, &ground_conv_end)? < 1e-5);
+            assert!(rel_err(&spec_rec_end, &ground_rec_end)? < 1e-5);
+
+            let stats = spec.replay_layer_stats(0).expect("replay stats");
+            assert_eq!(stats.rollback_copied_bytes, 0);
+            assert!(stats.rollbacks_executed > 0);
+
+            // Request 2 (CoW forked at offset 7) remains untouched!
+            let (fc2, fr2, fo2) = spec.inspect_recurrent_layer(2, 0)?;
+            assert_eq!(fo2, 7);
+            assert_eq!(rel_err(&fc2, &fork_c_ref)?, 0.0);
+            assert_eq!(rel_err(&fr2, &fork_r_ref)?, 0.0);
+
+            spec.cancel_request(1)?;
+            spec.cancel_request(2)?;
+        }
         Ok(())
     }
 

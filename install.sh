@@ -266,16 +266,16 @@ build_features() {
             cc_minor=$(( cuda_cc % 10 ))
             info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
 
-            if [ "${HANZO_INSTALL_NO_NCCL:-}" = "1" ]; then
-                info "HANZO_INSTALL_NO_NCCL=1 set - skipping nccl"
+            if [ "${ENGINE_INSTALL_NO_NCCL:-${HANZO_INSTALL_NO_NCCL:-}}" = "1" ]; then
+                info "ENGINE_INSTALL_NO_NCCL=1 set - skipping nccl"
             elif detect_nccl; then
                 features="$features nccl"
                 info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
-            elif [ "${HANZO_INSTALL_NCCL:-}" = "1" ]; then
+            elif [ "${ENGINE_INSTALL_NCCL:-${HANZO_INSTALL_NCCL:-}}" = "1" ]; then
                 features="$features nccl"
-                warn "HANZO_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
+                warn "ENGINE_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
             else
-                warn "NCCL not found - skipping nccl. Install NCCL or set HANZO_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+                warn "NCCL not found - skipping nccl. Install NCCL or set ENGINE_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
             fi
 
             # Check for cuDNN

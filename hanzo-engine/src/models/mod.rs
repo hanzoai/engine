@@ -55,6 +55,7 @@ pub(crate) mod qwen3_dflash;
 pub(crate) mod qwen3_dspark;
 pub(crate) mod qwen3_moe;
 pub(crate) mod qwen3_next;
+pub mod replay_gdn;
 pub(crate) mod smollm3;
 pub(crate) mod starcoder2;
 pub(crate) mod zen6;

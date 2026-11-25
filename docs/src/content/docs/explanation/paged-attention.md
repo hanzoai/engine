@@ -62,7 +62,7 @@ Chunking is internal and does not change the visible prompt, logits, or generate
 
 ## CUDA graphs
 
-CUDA decode graphs can replay supported single-token paged decode steps with lower CPU launch overhead. They are enabled by default for supported CUDA paged decode paths. Set `HANZO_CUDA_GRAPHS=0` to disable them.
+CUDA decode graphs can replay supported single-token paged decode steps with lower CPU launch overhead. They are enabled by default for supported CUDA paged decode paths. Set `ENGINE_CUDA_GRAPHS=0` to disable them.
 
 See [Use CUDA graphs](/hanzo/guides/perf/use-cuda-graphs/) for requirements and benchmarking guidance.
 

@@ -574,6 +574,18 @@ impl QRmsNorm {
         self.eps
     }
 
+    pub fn mul_weight(&self, factor: &Tensor) -> Result<Self> {
+        let factor = if factor.dtype() == self.weight.dtype() {
+            factor.clone()
+        } else {
+            factor.to_dtype(self.weight.dtype())?
+        };
+        Ok(Self {
+            eps: self.eps,
+            weight: (&self.weight * &factor)?,
+        })
+    }
+
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         hanzo_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }

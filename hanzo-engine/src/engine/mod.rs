@@ -286,20 +286,24 @@ impl Engine {
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
         // Build the prefix cacher, optionally attaching a disk-backed KV spill
-        // store. Opt in via KV_SPILL_DIR (budget via KV_SPILL_BUDGET_MB,
+        // store. Opt in via ENGINE_KV_SPILL_DIR (budget via ENGINE_KV_SPILL_BUDGET_MB,
         // default 4096). When unset the cacher is in-memory only and behaves exactly
         // as before. On attach we repopulate the hottest prefixes from a prior run,
         // so sessions and agent prefixes survive a process restart.
         let mut prefix_cacher =
             PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache, has_paged_attention);
         if !no_prefix_cache {
-            if let Ok(dir) = std::env::var("KV_SPILL_DIR") {
+            let spill_dir = crate::engine_env_var("ENGINE_KV_SPILL_DIR", "KV_SPILL_DIR")
+                .or_else(|_| std::env::var("HANZO_KV_SPILL_DIR"));
+            if let Ok(dir) = spill_dir {
                 let dir = dir.trim();
                 if !dir.is_empty() {
-                    let budget_mb = std::env::var("KV_SPILL_BUDGET_MB")
-                        .ok()
-                        .and_then(|s| s.trim().parse::<u64>().ok())
-                        .unwrap_or(4096);
+                    let budget_mb =
+                        crate::engine_env_var("ENGINE_KV_SPILL_BUDGET_MB", "KV_SPILL_BUDGET_MB")
+                            .or_else(|_| std::env::var("HANZO_KV_SPILL_BUDGET_MB"))
+                            .ok()
+                            .and_then(|s| s.trim().parse::<u64>().ok())
+                            .unwrap_or(4096);
                     match crate::disk_kv_cache::DiskKvCache::new(dir, budget_mb) {
                         Ok(disk) => {
                             // Validation context for untrusted `.kv` payloads: model

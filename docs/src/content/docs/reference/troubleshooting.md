@@ -45,7 +45,7 @@ For CUDA decode throughput, also check whether PagedAttention is active. FlashIn
 
 CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, Hanzo Engine pays warmup and capture overhead; steady-state decode is the part that can improve.
 
-If graph capture or replay fails, Hanzo Engine logs a warning and disables CUDA graphs for that loaded pipeline. Set `HANZO_CUDA_GRAPHS=0` to compare with the normal CUDA path.
+If graph capture or replay fails, Hanzo Engine logs a warning and disables CUDA graphs for that loaded pipeline. Set `ENGINE_CUDA_GRAPHS=0` to compare with the normal CUDA path.
 
 ### Response cut off
 

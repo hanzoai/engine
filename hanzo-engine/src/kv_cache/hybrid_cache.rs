@@ -290,6 +290,10 @@ impl RecurrentStatePool {
     pub fn device(&self) -> &Device {
         &self.device
     }
+
+    pub fn config(&self) -> &RecurrentLayerConfig {
+        &self.config
+    }
 }
 
 /// Per-layer cache that can be either attention (KV) or recurrent (state pool)
@@ -1109,8 +1113,8 @@ mod tests {
             c_shape[0] = 1;
             let mut r_shape = pool.recurrent_state.dims().to_vec();
             r_shape[0] = 1;
-            let c0 = Tensor::full(7.0f32, c_shape, &Device::Cpu)?
-                .to_dtype(pool.conv_state.dtype())?;
+            let c0 =
+                Tensor::full(7.0f32, c_shape, &Device::Cpu)?.to_dtype(pool.conv_state.dtype())?;
             let r0 = Tensor::full(9.0f32, r_shape, &Device::Cpu)?
                 .to_dtype(pool.recurrent_state.dtype())?;
             pool.conv_state.slice_set(&c0, 0, s0)?;

@@ -519,7 +519,37 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
 /// Output tensor [batch, topk, n]
 pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     match qmatmul {
-        QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
+        QMatMul::QTensor(qtensor) => {
+            if matches!(
+                qtensor.dtype(),
+                GgmlDType::Q4_0
+                    | GgmlDType::Q4_1
+                    | GgmlDType::Q5_0
+                    | GgmlDType::Q5_1
+                    | GgmlDType::Q8_0
+                    | GgmlDType::Q8_1
+                    | GgmlDType::Q2K
+                    | GgmlDType::Q3K
+                    | GgmlDType::Q4K
+                    | GgmlDType::Q5K
+                    | GgmlDType::Q6K
+            ) {
+                qtensor_indexed_moe_forward(qtensor, x, ids)
+            } else {
+                let orig_dtype = x.dtype();
+                let x_f32 = if orig_dtype == DType::F32 {
+                    x.clone()
+                } else {
+                    x.to_dtype(DType::F32)?
+                };
+                let out = qmatmul.indexed_moe_forward(&x_f32, ids)?;
+                if out.dtype() == orig_dtype {
+                    Ok(out)
+                } else {
+                    out.to_dtype(orig_dtype)
+                }
+            }
+        }
         QMatMul::Tensor(_) | QMatMul::TensorF16(_) => {
             hanzo_ml::bail!("indexed_moe_forward is only supported for quantized tensors (QTensor)")
         }

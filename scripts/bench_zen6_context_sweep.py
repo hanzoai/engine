@@ -221,7 +221,7 @@ def run_case(
             cmd.extend(["--dflash-block-size", str(dflash_block_size)])
 
     env = os.environ.copy()
-    env["HANZO_LSA_ADMIN_TOKEN"] = admin_token
+    env["ENGINE_LSA_ADMIN_TOKEN"] = admin_token
     gpu_before = gpu_utilization_pct()
     trial_results: list[dict[str, Any]] = []
 

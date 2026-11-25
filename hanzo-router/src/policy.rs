@@ -40,13 +40,17 @@ pub struct Policy {
     pub field_gamma: Option<f64>,
 }
 
-/// Read the mean-field strength from `ROUTER_FIELD`: a positive float enables
-/// load-aware routing; unset, unparseable, or `<= 0` leaves it OFF. Default-off and
-/// reversible by construction — the static head is exactly `field_gamma == None`.
+/// Read the mean-field strength from `ENGINE_ROUTER_FIELD` (or `ROUTER_FIELD`): a positive float
+/// enables load-aware routing; unset, unparseable, or `<= 0` leaves it OFF. Default-off and
+/// reversible by construction: the static head is exactly `field_gamma == None`.
 pub fn field_gamma_from_env() -> Option<f64> {
-    std::env::var("ROUTER_FIELD")
-        .ok()
-        .and_then(|s| s.trim().parse::<f64>().ok())
+    let raw = match std::env::var("ENGINE_ROUTER_FIELD") {
+        Err(std::env::VarError::NotPresent) => std::env::var("ROUTER_FIELD")
+            .or_else(|_| std::env::var("HANZO_ROUTER_FIELD"))
+            .ok(),
+        res => res.ok(),
+    };
+    raw.and_then(|s| s.trim().parse::<f64>().ok())
         .filter(|g| *g > 0.0)
 }
 
@@ -493,5 +497,24 @@ mod prefer_tests {
             "weak",
             "field on -> best-responds to load, diverts off the hot arm"
         );
+    }
+
+    #[test]
+    fn engine_router_field_precedes_legacy_env() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for k in ["ENGINE_ROUTER_FIELD", "ROUTER_FIELD", "HANZO_ROUTER_FIELD"] {
+            std::env::remove_var(k);
+        }
+        assert_eq!(super::field_gamma_from_env(), None);
+        std::env::set_var("HANZO_ROUTER_FIELD", "0.75");
+        assert_eq!(super::field_gamma_from_env(), Some(0.75));
+        std::env::set_var("ENGINE_ROUTER_FIELD", "0.25");
+        assert_eq!(super::field_gamma_from_env(), Some(0.25));
+        std::env::set_var("ENGINE_ROUTER_FIELD", "0");
+        assert_eq!(super::field_gamma_from_env(), None);
+        for k in ["ENGINE_ROUTER_FIELD", "ROUTER_FIELD", "HANZO_ROUTER_FIELD"] {
+            std::env::remove_var(k);
+        }
     }
 }

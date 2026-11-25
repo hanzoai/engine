@@ -1,0 +1,49 @@
+name: Autonomous Engine Research Campaign
+on:
+  pull_request:
+    paths:
+      - "hanzo-bench/**"
+      - "campaigns/**"
+      - "bench_lineage.json"
+      - "scripts/engine_research_executor.py"
+      - ".github/workflows/autonomous-research.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "37 */4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    if: github.event_name != 'schedule'
+    runs-on: linux-amd64
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate engine bench_lineage.json and campaign manifest
+        run: |
+          python3 -c "import json; lin=json.load(open('bench_lineage.json')); reg=json.load(open('campaigns/engine_inference.json')); assert len(lin) >= 7 and len(reg['objectives']) >= 5"
+
+  gpu-tick:
+    if: vars.ENGINE_RESEARCH_CAMPAIGN_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, Linux, gpu]
+    timeout-minutes: 180
+    concurrency:
+      group: engine-autonomous-research-gpu
+      cancel-in-progress: false
+    env:
+      CUDARC_CUDA_VERSION: "13030"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run autonomous progressive A/B engine tick
+        run: |
+          python3 -m hanzo_research tick \
+            --dir "${HOME}/.hanzo/research" \
+            --campaign campaigns/engine_inference.json \
+            --lineage bench_lineage.json \
+            --executor scripts/engine_research_executor.py \
+            --timeout-minutes 60

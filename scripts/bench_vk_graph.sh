@@ -26,7 +26,7 @@ set -uo pipefail
 MODEL=""
 OUT=""
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER="${HANZO_SERVER:-$HERE/../target/release/hanzo-server}"
+SERVER="${ENGINE_SERVER:-${HANZO_SERVER:-$HERE/../target/release/hanzo-server}}"
 PORT=1250
 GEN=200
 MIN_WIN_PCT=5
