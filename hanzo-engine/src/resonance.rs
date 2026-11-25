@@ -49,7 +49,9 @@ impl fmt::Display for WaveError {
             Self::NonFinite => f.write_str("wave pattern contains a non-finite number"),
             Self::NegativeAmplitude => f.write_str("wave amplitudes must be non-negative"),
             Self::InvalidWeight => f.write_str("resonance weight must be within [0, 1]"),
-            Self::InvalidCosine => f.write_str("cosine similarity must be finite and within [-1, 1]"),
+            Self::InvalidCosine => {
+                f.write_str("cosine similarity must be finite and within [-1, 1]")
+            }
         }
     }
 }
@@ -273,7 +275,10 @@ mod tests {
 
     #[test]
     fn rejects_invalid_input() {
-        assert_eq!(WavePattern::from_embedding(&[]).unwrap_err(), WaveError::Empty);
+        assert_eq!(
+            WavePattern::from_embedding(&[]).unwrap_err(),
+            WaveError::Empty
+        );
         assert_eq!(
             WavePattern::from_embedding(&[f32::NAN]).unwrap_err(),
             WaveError::NonFinite
@@ -306,12 +311,21 @@ mod tests {
         let matches = rerank_candidates(
             &denied,
             [
-                Candidate { id: "asserted", pattern: &asserted, dense_cosine: 1.0 },
-                Candidate { id: "denied", pattern: &denied, dense_cosine: 1.0 },
+                Candidate {
+                    id: "asserted",
+                    pattern: &asserted,
+                    dense_cosine: 1.0,
+                },
+                Candidate {
+                    id: "denied",
+                    pattern: &denied,
+                    dense_cosine: 1.0,
+                },
             ],
             0.75,
             2,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(matches[0].id, "denied");
         near(matches[0].score, 1.0);
         near(matches[1].score, 0.25);
@@ -321,12 +335,67 @@ mod tests {
     fn rejects_invalid_fusion_and_cosine() {
         let a = WavePattern::from_embedding(&[1.0]).unwrap();
         assert_eq!(
-            rerank_candidates(&a, [Candidate { id: "a", pattern: &a, dense_cosine: f64::NAN }], 0.5, 1).unwrap_err(),
+            rerank_candidates(
+                &a,
+                [Candidate {
+                    id: "a",
+                    pattern: &a,
+                    dense_cosine: f64::NAN
+                }],
+                0.5,
+                1
+            )
+            .unwrap_err(),
             WaveError::InvalidCosine
         );
         assert_eq!(
             rerank_candidates(&a, std::iter::empty(), 1.5, 1).unwrap_err(),
             WaveError::InvalidWeight
         );
+    }
+
+    #[test]
+    fn cross_language_parity_vectors_match_semantic_go() {
+        let a = WavePattern::from_cartesian(vec![0.6, -0.3, 0.5, 0.2], vec![0.1, 0.4, -0.2, 0.3])
+            .unwrap();
+        let b = WavePattern::from_cartesian(vec![0.5, -0.2, 0.4, 0.1], vec![0.2, 0.3, -0.1, 0.4])
+            .unwrap();
+        near(a.resonance(&b).unwrap(), 0.965875429);
+        let b_neg = b.apply(PhaseOperator::Negate).unwrap();
+        near(a.resonance(&b_neg).unwrap(), 0.021951715);
+
+        let p1 = WavePattern::from_polar(&[1.0, 2.0, 0.5, 1.5], &[0.25, -0.75, 1.1, -0.4]).unwrap();
+        let p2 = WavePattern::from_polar(&[1.2, 1.8, 0.7, 1.3], &[0.35, -0.55, 0.9, -0.1]).unwrap();
+        near(p1.resonance(&p2).unwrap(), 0.981487148);
+
+        let orth = WavePattern::from_embedding(&[0.0, 1.0, 0.0, 0.0]).unwrap();
+        let hits = rerank_candidates(
+            &a,
+            [
+                Candidate {
+                    id: "negated",
+                    pattern: &b_neg,
+                    dense_cosine: 0.95,
+                },
+                Candidate {
+                    id: "aligned",
+                    pattern: &b,
+                    dense_cosine: 0.80,
+                },
+                Candidate {
+                    id: "orthogonal",
+                    pattern: &orth,
+                    dense_cosine: 0.50,
+                },
+            ],
+            0.75,
+            3,
+        )
+        .unwrap();
+        assert_eq!(hits[0].id, "aligned");
+        assert_eq!(hits[1].id, "orthogonal");
+        assert_eq!(hits[2].id, "negated");
+        near(hits[0].score, 0.75 * 0.965875429 + 0.25 * 0.90);
+        near(hits[2].score, 0.75 * 0.021951715 + 0.25 * 0.975);
     }
 }
