@@ -168,7 +168,12 @@ impl Model {
 }
 
 /// Single-source graph eligibility by runtime model variant (not GGUF filename).
-/// Some Zen6-Nano GGUFs load as Qwen35; Qwen35 is graph eligible but batch-1-only.
+/// Qwen/Qwen3 use stable position buffers for paged decode. Qwen35 and MoE
+/// variants have additional single-sequence constraints. Deepseek2's paged
+/// materialized-MLA path is stable. Deepseek4 stays excluded because graph
+/// capture currently regresses its kernel-bound decode. Llama has a separate
+/// runtime-specific support test. Some Zen6-Nano GGUFs load as Qwen35;
+/// Model::Zen6 itself is not eligible.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn gguf_graph_eligible_variant(name: &str) -> bool {
     matches!(name, "Qwen" | "Qwen3" | "Qwen3MoE" | "Qwen35" | "Deepseek2")
@@ -217,26 +222,6 @@ pub struct GGUFPipeline {
     #[cfg(feature = "vulkan")]
     vulkan_decode_graph: std::sync::Mutex<VulkanDecodeGraphState>,
     forward_telemetry: crate::pipeline::AtomicForwardStepTelemetry,
-}
-
-#[cfg(feature = "cuda")]
-impl Drop for GGUFPipeline {
-    fn drop(&mut self) {
-        if let Ok(state) = self.cuda_decode_graph.lock() {
-            info!(
-                "cuda_decode_graph summary: model={} eligible={} enabled={} single_seq_only={} captures={} replays={} evictions={} eager_steps={} disabled={}",
-                self.model.variant_name(),
-                self.model_supports_decode_graph(),
-                cuda_decode_graphs_enabled(),
-                self.model.graph_single_seq_only(),
-                state.captures,
-                state.replays,
-                state.evictions,
-                state.eager_steps,
-                state.disabled,
-            );
-        }
-    }
 }
 
 #[cfg(feature = "rocm")]
@@ -1354,11 +1339,22 @@ impl MetadataMixin for GGUFPipeline {
     fn cleanup_cuda_graphs(&self) {
         #[cfg(feature = "cuda")]
         {
-            self.cuda_decode_graph
-                .lock()
-                .expect("CUDA graph mutex poisoned")
-                .entries
-                .clear();
+            // The engine calls cleanup while its CUDA worker is still alive.
+            // Report the observed path, not just the CUDA_GRAPHS env toggle.
+            let mut state = self.cuda_decode_graph.lock().expect("CUDA graph mutex poisoned");
+            info!(
+                "cuda_decode_graph summary: model={} eligible={} enabled={} single_seq_only={} captures={} replays={} evictions={} eager_steps={} disabled={}",
+                self.model.variant_name(),
+                self.model_supports_decode_graph(),
+                cuda_decode_graphs_enabled(),
+                self.model.graph_single_seq_only(),
+                state.captures,
+                state.replays,
+                state.evictions,
+                state.eager_steps,
+                state.disabled,
+            );
+            state.entries.clear();
         }
         #[cfg(feature = "rocm")]
         {
