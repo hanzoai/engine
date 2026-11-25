@@ -503,7 +503,10 @@ impl KiviKeyPage {
 
         match bits {
             KiviBits::Int4 => {
-                for (row, tok_w) in keys.chunks_exact(head_size).zip(codes.chunks_exact_mut(wpt)) {
+                for (row, tok_w) in keys
+                    .chunks_exact(head_size)
+                    .zip(codes.chunks_exact_mut(wpt))
+                {
                     for (w_idx, (chunk, dst)) in row.chunks_exact(8).zip(tok_w).enumerate() {
                         let base = w_idx * 8;
                         let mut word = 0u32;
@@ -524,7 +527,10 @@ impl KiviKeyPage {
                 }
             }
             KiviBits::Int2 => {
-                for (row, tok_w) in keys.chunks_exact(head_size).zip(codes.chunks_exact_mut(wpt)) {
+                for (row, tok_w) in keys
+                    .chunks_exact(head_size)
+                    .zip(codes.chunks_exact_mut(wpt))
+                {
                     for (w_idx, (chunk, dst)) in row.chunks_exact(16).zip(tok_w).enumerate() {
                         let base = w_idx * 16;
                         let mut word = 0u32;
@@ -986,14 +992,8 @@ impl KiviValuePage {
 
 #[derive(Clone, Debug)]
 enum ResidualStorage {
-    Fp16 {
-        keys: Vec<f16>,
-        values: Vec<f16>,
-    },
-    Fp32 {
-        keys: Vec<f32>,
-        values: Vec<f32>,
-    },
+    Fp16 { keys: Vec<f16>, values: Vec<f16> },
+    Fp32 { keys: Vec<f32>, values: Vec<f32> },
 }
 
 impl ResidualStorage {
@@ -1573,8 +1573,10 @@ impl KiviKvCache {
         }
 
         let q_per_kv = num_q_heads / self.num_kv_heads;
-        for (q_idx, (q_slice, out_slice)) in
-            queries.chunks_exact(d).zip(out.chunks_exact_mut(d)).enumerate()
+        for (q_idx, (q_slice, out_slice)) in queries
+            .chunks_exact(d)
+            .zip(out.chunks_exact_mut(d))
+            .enumerate()
         {
             let kv_head = q_idx / q_per_kv;
             self.fused_decode_head(kv_head, q_slice, softmax_scale, out_slice)?;
@@ -1780,8 +1782,10 @@ impl UniformSymmetricKvCache {
         let q_per_kv = num_q_heads / self.num_kv_heads;
         let mut row_buf = [0.0f32; MAX_HEAD_DIM];
 
-        for (q_idx, (q_slice, out_slice)) in
-            queries.chunks_exact(d).zip(out.chunks_exact_mut(d)).enumerate()
+        for (q_idx, (q_slice, out_slice)) in queries
+            .chunks_exact(d)
+            .zip(out.chunks_exact_mut(d))
+            .enumerate()
         {
             out_slice.fill(0.0);
             let h = q_idx / q_per_kv;
@@ -1838,7 +1842,9 @@ impl UniformSymmetricKvCache {
 /// Quantize a single vector symmetrically per token (`Int4` codes in `-7..=7` biased by `+7`;
 /// `Int2` 4-level mid-riser codes `{-3, -1, +1, +3}` mapped to `0..=3`).
 pub fn quantize_symmetric_token(bits: KiviBits, row: &[f32], out_words: &mut [u32]) -> f32 {
-    let amax = row.iter().fold(0.0f32, |m, &v| m.max(sanitize_f32(v).abs()));
+    let amax = row
+        .iter()
+        .fold(0.0f32, |m, &v| m.max(sanitize_f32(v).abs()));
     match bits {
         KiviBits::Int4 => {
             let scale = if amax > 0.0 { amax / 7.0 } else { 1.0 };

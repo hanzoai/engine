@@ -551,7 +551,10 @@ fn recurrent_gdn_state_negative_control_proves_exemption_necessity() {
             diff * diff
         })
         .sum();
-    let ref_sq: f64 = state_exact.iter().map(|&a| f64::from(a) * f64::from(a)).sum();
+    let ref_sq: f64 = state_exact
+        .iter()
+        .map(|&a| f64::from(a) * f64::from(a))
+        .sum();
     let rel_l2 = (err_sq / ref_sq).sqrt();
     println!("[gdn-negative-control] recurrent_state_rel_l2_drift={rel_l2:.4}");
     assert!(
