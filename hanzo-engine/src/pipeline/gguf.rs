@@ -174,12 +174,12 @@ impl Model {
 /// capture currently regresses its kernel-bound decode. Llama has a separate
 /// runtime-specific support test. Some Zen6-Nano GGUFs load as Qwen35;
 /// Model::Zen6 itself is not eligible.
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[allow(dead_code)]
 fn gguf_graph_eligible_variant(name: &str) -> bool {
     matches!(name, "Qwen" | "Qwen3" | "Qwen3MoE" | "Qwen35" | "Deepseek2")
 }
 
-#[cfg(all(test, feature = "cuda"))]
+#[cfg(test)]
 mod gguf_decode_graph_eligibility_tests {
     use super::gguf_graph_eligible_variant;
     #[test]
@@ -1136,7 +1136,7 @@ impl Loader for GGUFLoader {
         info!(
             "cuda_decode_graph eligibility: model={} eligible={} enabled={} single_seq_only={}",
             model.variant_name(),
-            mapper.get_unique_devices().len() <= 1
+            pipeline_mapper.get_unique_devices().len() <= 1
                 && model.variant_supports_decode_graph_static(),
             cuda_decode_graphs_enabled(),
             model.graph_single_seq_only(),
