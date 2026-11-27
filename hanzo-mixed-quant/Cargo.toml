@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-mixed-quant"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room mixed-precision per-layer quantization (Ternary, INT4, INT8, BF16) with AWQ, SpinQuant orthogonal rotations, LLM Compressor sensitivity planning, and QAD (HIP-1346)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["quantization", "awq", "spinquant", "mixed-precision", "llm"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "mixed-quant-bench"
+path = "src/bin/mixed_quant_bench.rs"

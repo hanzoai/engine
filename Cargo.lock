@@ -3545,6 +3545,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-mixed-quant"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-ml"
 version = "0.11.124"
 source = "registry+https://github.com/rust-lang/crates.io-index"
