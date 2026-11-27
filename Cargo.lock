@@ -3450,6 +3450,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-hetero-mem"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-kernel"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-hetero-mem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room heterogeneous CPU/GPU memory offload, PowerInfer hot/cold partitioning, zero-copy unified memory views, compressed paged weight residency, and async layer/expert prefetch for hybrid Transformer + GDN inference (HIP-1346)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["offload", "powerinfer", "unified-memory", "mmap", "llm"]
+categories = ["science", "algorithms", "memory-management"]
+
+[dependencies]
+
+[[bin]]
+name = "hetero-bench"
+path = "src/bin/hetero_bench.rs"
