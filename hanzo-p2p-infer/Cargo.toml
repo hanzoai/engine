@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-p2p-infer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room peer-to-peer distributed LLM inference runtime: pipeline partitioning, network-aware MoE expert routing, TCP activation transport, live disconnect failover, and verifiable stage receipts (HIP-1350)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["distributed-inference", "pipeline-parallel", "moe", "p2p", "llm"]
+categories = ["network-programming", "science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "p2p-infer-bench"
+path = "src/bin/p2p-infer-bench.rs"
