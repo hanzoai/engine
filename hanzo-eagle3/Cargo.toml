@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-eagle3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room EAGLE-3 feature-level speculative decoding, lossless linear/tree verification, suffix prompt lookup, and workload-aware draft selection (HIP-1346)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["speculative-decoding", "eagle3", "llm", "inference", "tree-attention"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "eagle3-bench"
+path = "src/bin/eagle3_bench.rs"

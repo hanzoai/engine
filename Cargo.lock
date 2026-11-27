@@ -3266,6 +3266,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-eagle3"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-engine"
 version = "1.7.109"
 dependencies = [
