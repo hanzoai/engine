@@ -109,6 +109,43 @@ enum Model {
 }
 
 impl Model {
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Model::Llama(_) => "Llama",
+            Model::Phi2(_) => "Phi2",
+            Model::XLoraLlama(_) => "XLoraLlama",
+            Model::XLoraPhi3(_) => "XLoraPhi3",
+            Model::Phi3(_) => "Phi3",
+            Model::Gemma(_) => "Gemma",
+            Model::MiniMax(_) => "MiniMax",
+            Model::Starcoder2(_) => "Starcoder2",
+            Model::Qwen(_) => "Qwen",
+            Model::Qwen3(_) => "Qwen3",
+            Model::Qwen3MoE(_) => "Qwen3MoE",
+            Model::Qwen3Next(_) => "Qwen3Next",
+            Model::Qwen35(_) => "Qwen35",
+            Model::Zen6(_) => "Zen6",
+            Model::Deepseek2(_) => "Deepseek2",
+            Model::Deepseek4(_) => "Deepseek4",
+            Model::GptOss(_) => "GptOss",
+            Model::Glm4Moe(_) => "Glm4Moe",
+        }
+    }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn variant_supports_decode_graph_static(&self) -> bool {
+        match self {
+            Model::Llama(model) => model.supports_decode_graph(),
+            model => gguf_graph_eligible_variant(model.variant_name()),
+        }
+    }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn graph_single_seq_only(&self) -> bool {
+        matches!(self, Model::Qwen35(_) | Model::Qwen3MoE(_) | Model::Deepseek2(_))
+    }
+
     /// The model's self-speculative capability, if it carries an MTP head. This is
     /// the ONE place the enum maps a variant to [`SelfSpeculative`]; the speculative
     /// pipeline asks for the trait object and never matches on the architecture.
@@ -127,6 +164,30 @@ impl Model {
             Model::Zen6(m) => Some(m),
             _ => None,
         }
+    }
+}
+
+/// Single-source graph eligibility by runtime model variant (not GGUF filename).
+/// Qwen/Qwen3 use stable position buffers for paged decode. Qwen35 and MoE
+/// variants have additional single-sequence constraints. Deepseek2's paged
+/// materialized-MLA path is stable. Deepseek4 stays excluded because graph
+/// capture currently regresses its kernel-bound decode. Llama has a separate
+/// runtime-specific support test. Some Zen6-Nano GGUFs load as Qwen35;
+/// Model::Zen6 itself is not eligible.
+#[allow(dead_code)]
+fn gguf_graph_eligible_variant(name: &str) -> bool {
+    matches!(name, "Qwen" | "Qwen3" | "Qwen3MoE" | "Qwen35" | "Deepseek2")
+}
+
+#[cfg(test)]
+mod gguf_decode_graph_eligibility_tests {
+    use super::gguf_graph_eligible_variant;
+    #[test]
+    fn zen6_gguf_is_not_decode_graph_eligible() {
+        assert!(!gguf_graph_eligible_variant("Zen6"));
+        assert!(gguf_graph_eligible_variant("Qwen35"));
+        assert!(gguf_graph_eligible_variant("Qwen3"));
+        assert!(!gguf_graph_eligible_variant("Qwen3Next"));
     }
 }
 
@@ -376,6 +437,10 @@ struct VulkanDecodeGraphEntry {
 struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     disabled: bool,
+    captures: u64,
+    replays: u64,
+    evictions: u64,
+    eager_steps: u64,
 }
 
 #[cfg(feature = "cuda")]
@@ -1067,6 +1132,15 @@ impl Loader for GGUFLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "cuda")]
+        info!(
+            "cuda_decode_graph eligibility: model={} eligible={} enabled={} single_seq_only={}",
+            model.variant_name(),
+            pipeline_mapper.get_unique_devices().len() <= 1
+                && model.variant_supports_decode_graph_static(),
+            cuda_decode_graphs_enabled(),
+            model.graph_single_seq_only(),
+        );
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -1265,11 +1339,22 @@ impl MetadataMixin for GGUFPipeline {
     fn cleanup_cuda_graphs(&self) {
         #[cfg(feature = "cuda")]
         {
-            self.cuda_decode_graph
-                .lock()
-                .expect("CUDA graph mutex poisoned")
-                .entries
-                .clear();
+            // The engine calls cleanup while its CUDA worker is still alive.
+            // Report the observed path, not just the CUDA_GRAPHS env toggle.
+            let mut state = self.cuda_decode_graph.lock().expect("CUDA graph mutex poisoned");
+            info!(
+                "cuda_decode_graph summary: model={} eligible={} enabled={} single_seq_only={} captures={} replays={} evictions={} eager_steps={} disabled={}",
+                self.model.variant_name(),
+                self.model_supports_decode_graph(),
+                cuda_decode_graphs_enabled(),
+                self.model.graph_single_seq_only(),
+                state.captures,
+                state.replays,
+                state.evictions,
+                state.eager_steps,
+                state.disabled,
+            );
+            state.entries.clear();
         }
         #[cfg(feature = "rocm")]
         {
@@ -1347,46 +1432,9 @@ impl GGUFPipeline {
     /// source of truth for decode-graph eligibility, shared by the CUDA and ROCm graph
     /// paths (both capture the identical device-generic model forward).
     fn model_supports_decode_graph(&self) -> bool {
-        // Multi-GPU device mapping freezes RoPE under capture: layers on a non-primary device do
-        // `positions.to_device()` -> a fresh per-forward tensor that `copy_rope_positions` never
-        // refreshes. Restrict capture to single-device so that frozen class is structurally
-        // impossible (multi-GPU decode falls back to the always-correct eager path).
+        // Captures must stay on one GPU; a cross-device RoPE copy freezes its positions.
         self.mapper.get_unique_devices().len() <= 1
-            && match &self.model {
-                // Qwen2: dense GQA transformer whose decode step is shape-stable at
-                // seq_len==1 (paged attention gives position-invariant KV) and whose
-                // RoPE reads the device `rope_positions` buffer (`forward_positions`),
-                // so the captured rotation advances per replay. No MoE host-side routing
-                // sort, so capture is clean at any batch (not single-seq-gated).
-                Model::Qwen(_) => true,
-                Model::Qwen3(_) | Model::Qwen3MoE(_) => true,
-                // Qwen3.5/3.6 hybrid (Gated-DeltaNet + MoE): capturable now that (a) the full-attn
-                // layers run through PagedAttention (position-invariant KV), (b) mRoPE reads the
-                // stable `rope_positions` buffer, and (c) the GDN recurrent/conv state is gathered
-                // and scattered in place via a constant host slot (no `to_vec1` sync). The baked
-                // slot is only valid for a single sequence, so `model_decode_graph_single_seq_only`
-                // gates capture to batch == 1.
-                Model::Qwen35(_) => true,
-                // DeepSeek-V2 / GLM-5.2 (`deepseek2`/`glm-dsa` arch): capture-eligible on the
-                // paged decode step. The materialized MLA path (`Some(paged_attn)` branch) is
-                // shape-stable at seq_len==1 — projections/splits/cats and the V-pad are all
-                // fixed — and its RoPE now reads the device `rope_positions` buffer
-                // (`forward_positions`), so the captured rotation advances per replay instead of
-                // freezing at the warmup position. The 256-expert MoE routes through the same
-                // capture-clean `indexed_moe` matvec Qwen3MoE captures at batch==1 (no host
-                // counting sort), and the DSA lightning-indexer is dormant on the paged path
-                // (it only fires on the eager non-paged cold-prefill `None` branch). MoE ⇒
-                // batch==1 only (`model_decode_graph_single_seq_only`).
-                Model::Deepseek2(_) => true,
-                // DeepSeek-V4 is capture-eligible (compressor prefill-only → shape-stable
-                // decode), and `run_decode_forward` handles it — BUT the decode is currently
-                // KERNEL-bound (Q2_K down experts hit the CPU-bound generic MoE fallback,
-                // not a resident dp4a kernel), so capture adds warmup overhead with no
-                // payoff (measured regression). Re-enable once the Q2_K resident MoE dp4a
-                // kernel lands; THEN the graph pays off (target ~24 t/s).
-                Model::Llama(model) => model.supports_decode_graph(),
-                _ => false,
-            }
+            && self.model.variant_supports_decode_graph_static()
     }
 
     /// Runs the decode forward for the graph-eligible variants with the supplied
@@ -1436,10 +1484,7 @@ impl GGUFPipeline {
     /// capture would bake garbage routing into every replay; ml now bails there, so gating here
     /// keeps batch > 1 MoE decode on the always-correct eager path instead of thrashing capture).
     fn model_decode_graph_single_seq_only(&self) -> bool {
-        matches!(
-            self.model,
-            Model::Qwen35(_) | Model::Qwen3MoE(_) | Model::Deepseek2(_)
-        )
+        self.model.graph_single_seq_only()
     }
 }
 
@@ -1512,6 +1557,7 @@ impl GGUFPipeline {
             entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
             entry.graph.launch()?;
             self.forward_telemetry.record_decode_replay();
+            state.replays += 1;
             let logits = entry.logits.clone();
             state.entries.push(entry);
             return Ok(Some(logits));
@@ -1548,8 +1594,12 @@ impl GGUFPipeline {
             Ok(entry) => {
                 if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
                     state.entries.remove(0);
+                    state.evictions += 1;
                 }
                 state.entries.push(entry);
+                state.captures += 1;
+                // Graph capture also executes an eager warmup forward.
+                state.eager_steps += 1;
                 self.forward_telemetry.record_decode_capture();
             }
             Err(err) => {
@@ -2610,6 +2660,13 @@ impl Pipeline for GGUFPipeline {
                     Ok(None) => {}
                     Err(err) => self.disable_cuda_prefill_graph(&err),
                 }
+            }
+        }
+        // Count actual single-token eager forwards, not prefill.
+        #[cfg(feature = "cuda")]
+        if input_ids.dims().len() == 2 && input_ids.dims()[1] == 1 {
+            if let Ok(mut state) = self.cuda_decode_graph.lock() {
+                state.eager_steps += 1;
             }
         }
         let logits = match self.model {
