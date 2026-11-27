@@ -1,0 +1,23 @@
+# Copyright 2026 Hanzo AI, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "hanzo-zkml"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+repository.workspace = true
+description = "Clean-room Apache-2.0 zkML model-specific R1CS circuits and general deterministic register zkVM prover/verifier over Goldilocks F_p / F_{p^2} with Spartan Sumcheck and Ligero RS-Merkle commitments (HIP-1350)"
+keywords = ["zkml", "zkvm", "sumcheck", "merkle", "verification"]
+categories = ["cryptography", "mathematics", "science"]
+
+# Zero external dependencies: pure Rust std clean-room implementation.
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "zkml-bench"
+path = "src/bin/zkml-bench.rs"
