@@ -1,0 +1,23 @@
+[package]
+name = "hanzo-provider-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+description = "Permissionless GPU provider daemon with RFC 8032 Ed25519 identity, multi-tenant isolation, admission control, sovereign receipt ledger, and HTTP/1.1 RPC."
+keywords = ["gpu", "provider", "decentralized", "inference", "ed25519"]
+categories = ["network-programming", "cryptography", "science"]
+
+# Zero external crate dependencies: pure Rust std for fast offline builds,
+# minimal attack surface, and frictionless sovereign operation/forking.
+[dependencies]
+
+[lib]
+name = "hanzo_provider_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "provider-daemon-bench"
+path = "src/bin/provider-daemon-bench.rs"

@@ -1,0 +1,174 @@
+{
+  "axis_1_cost": {
+    "compute_usd_per_1m_tokens": 0.1641,
+    "total_cost_micro_usd": 1260,
+    "total_usd_per_1m_useful_tokens": 0.1645,
+    "verification_cpu_usd_per_1m_tokens": 0.0005
+  },
+  "axis_2_performance": {
+    "completed_jobs": 60,
+    "completion_rate_pct": 100,
+    "e2e_latency_p50_ms": 17.701,
+    "e2e_latency_p95_ms": 25.946,
+    "e2e_latency_p99_ms": 28.733,
+    "providers": 3,
+    "throughput_jobs_per_sec": 156.238,
+    "throughput_tokens_per_sec": 19998.521,
+    "total_completion_tokens": 2880,
+    "total_jobs": 60,
+    "total_prompt_tokens": 4800,
+    "ttft_p50_ms": 2.044,
+    "ttft_p95_ms": 8,
+    "ttft_p99_ms": 8.361,
+    "wall_secs": 0.384
+  },
+  "axis_3_trust": {
+    "adversarial_rejection_rate_pct": 100,
+    "cross_tenant_bleed_pct": 0,
+    "vectors": [
+      {
+        "observation": "HTTP 401",
+        "rejected": true,
+        "vector": "forged_tenant_signature"
+      },
+      {
+        "observation": "HTTP 400",
+        "rejected": true,
+        "vector": "tampered_max_tokens"
+      },
+      {
+        "observation": "HTTP 400",
+        "rejected": true,
+        "vector": "tampered_price_micro_usd"
+      },
+      {
+        "observation": "HTTP 400",
+        "rejected": true,
+        "vector": "tampered_model_id"
+      },
+      {
+        "observation": "HTTP 401",
+        "rejected": true,
+        "vector": "expired_quote_ttl"
+      },
+      {
+        "observation": "HTTP 409",
+        "rejected": true,
+        "vector": "replayed_lease_nonce"
+      },
+      {
+        "observation": "HTTP 403",
+        "rejected": true,
+        "vector": "cross_provider_lease_redirection"
+      },
+      {
+        "observation": "HTTP 400",
+        "rejected": true,
+        "vector": "over_budget_context_tokens"
+      },
+      {
+        "observation": "HTTP 413",
+        "rejected": true,
+        "vector": "oversized_http_payload_dos"
+      },
+      {
+        "observation": "HTTP 400",
+        "rejected": true,
+        "vector": "path_traversal_tenant_id"
+      },
+      {
+        "observation": "HTTP 400",
+        "rejected": true,
+        "vector": "nul_byte_prompt_injection"
+      },
+      {
+        "observation": "CrossTenantAccessDenied",
+        "rejected": true,
+        "vector": "cross_tenant_kv_scratch_probe"
+      },
+      {
+        "observation": "HTTP 422",
+        "rejected": true,
+        "vector": "tampered_completion_receipt"
+      },
+      {
+        "observation": "HashChainViolationDetected",
+        "rejected": true,
+        "vector": "tampered_sovereign_ledger_chain"
+      },
+      {
+        "observation": "HTTP 503",
+        "rejected": true,
+        "vector": "lease_rejected_during_drain"
+      }
+    ],
+    "vectors_rejected": 15,
+    "vectors_tested": 15
+  },
+  "axis_4_decentralization": {
+    "decentralization_share_pct": 100,
+    "hanzo_control_plane_calls": 0,
+    "independent_providers_registered": 3,
+    "operator_approvals_required": 0
+  },
+  "axis_5_sovereignty": {
+    "lossless_recovery_pct": 100,
+    "post_restart_jobs_completed": 3,
+    "pre_restart_nonces_still_blocked": 3,
+    "providers_exported_and_restarted": 3
+  },
+  "benchmark": "hip-1350-permissionless-gpu-provider-daemon",
+  "issue": "hanzoai/engine#64",
+  "negative_regime_1_overload_saturation": {
+    "admission_controlled": {
+      "accepted_jobs": 8,
+      "accepted_p50_ms": 55.601,
+      "accepted_p99_ms": 60.601,
+      "fast_rejected_429_jobs": 16,
+      "peak_vram_mib": 12288,
+      "reject_429_p50_ms": 8.538,
+      "vram_oversubscription_events": 0
+    },
+    "offered_concurrency": 4,
+    "offered_jobs": 24,
+    "provider_max_concurrency": 2,
+    "tail_latency_protection_factor": 1.518,
+    "unthrottled_oversubscribed_control": {
+      "admitted_jobs": 24,
+      "p50_ms": 82.91,
+      "p99_ms": 92.007,
+      "peak_vram_mib": 24576,
+      "vram_oversubscription_events": 22
+    },
+    "vram_budget_mib": 12288
+  },
+  "negative_regime_2_unverified_control": {
+    "adversarial_jobs": 10,
+    "legitimate_jobs": 40,
+    "unverified_adversarial_executed": 10,
+    "unverified_avg_job_us": 356.85,
+    "unverified_fraud_detection_pct": 0,
+    "unverified_revenue_leakage_pct": 100,
+    "unverified_signed_receipts": 0,
+    "verification_overhead_us_per_job": 4158.45,
+    "verified_adversarial_rejected": 10,
+    "verified_avg_job_us": 4515.3,
+    "verified_fraud_detection_pct": 100,
+    "verified_signed_receipts": 40
+  },
+  "public_corpus": {
+    "files": [
+      "README.md",
+      "LLM.md",
+      "LICENSE-APACHE",
+      "HANZO_ENGINE_INTEGRATION.md",
+      "hanzo-server-core/src/tenant.rs",
+      "hanzo-sandbox/src/lib.rs",
+      "hanzo-cli/src/cluster.rs",
+      "hanzo-server/src/zap_server.rs"
+    ],
+    "sha256": "3e65974a4937b8a852775864dd13e4810189e737d7c2e0af4937d72b1228fbf0",
+    "total_bytes": 190451
+  },
+  "seed": 1350
+}
