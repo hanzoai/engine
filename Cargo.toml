@@ -23,6 +23,7 @@ members = [
     "hanzo-train",
     "hanzo-tokenizer",
     "hanzo-kv-fabric",
+    "hanzo-edge-provider",
 ]
 resolver = "2"
 

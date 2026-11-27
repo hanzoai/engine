@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-edge-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room decentralized edge and mobile inference provider runtime: unified-memory residency accounting, RC thermal/power DVFS governor, automatic market withdrawal and peer handover, live TCP serving, and verifiable metered work receipts (HIP-1350)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["edge-inference", "mobile-ai", "decentralized", "thermal-governor", "metering"]
+categories = ["network-programming", "science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "edge-provider-bench"
+path = "src/bin/edge-provider-bench.rs"
