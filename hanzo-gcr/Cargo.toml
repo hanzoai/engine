@@ -1,0 +1,21 @@
+# Copyright 2026 Hanzo AI, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "hanzo-gcr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+authors = ["Hanzo AI <dev@hanzo.ai>"]
+description = "Clean-room incremental GPU checkpoint/restore (GCR) with page-level atomic dirty tracking, bounded delta chain compaction, and crash-safe tenant-isolated storage (HIP-1346 / engine#91)."
+license = "Apache-2.0"
+repository = "https://github.com/hanzoai/engine"
+keywords = ["gpu", "checkpoint", "restore", "llm", "storage"]
+categories = ["science", "systems", "caching"]
+
+[dependencies]
+# Zero external crate dependencies: pure Rust std only.
+
+[[bin]]
+name = "gcr-bench"
+path = "src/bin/gcr-bench.rs"
