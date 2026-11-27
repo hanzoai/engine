@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-cuda-graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room breakable CUDA graph capture, memory-lifetime sanitizer, bounded shape bucketing, and graph-compatible speculative verification for hybrid linear-attention (GDN/LSA) decode (HIP-1346)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["cuda-graph", "linear-attention", "gdn", "speculative-decoding", "llm"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "cuda-graph-bench"
+path = "src/bin/cuda-graph-bench.rs"
