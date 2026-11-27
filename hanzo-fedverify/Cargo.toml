@@ -1,0 +1,23 @@
+# Copyright 2026 Hanzo AI, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "hanzo-fedverify"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+repository.workspace = true
+description = "Verifiable federated updates and Byzantine-robust training (HIP-1350, hanzoai/engine#73): pure-Rust Ed25519 model-update identity, Multi-Krum/cosine/Sybil collusion resistance, independent held-out quality gating, signed rejected-update attribution receipts, and sovereign audit ledger replay."
+keywords = ["federated-learning", "byzantine-robust", "ed25519", "verification", "decentralized"]
+categories = ["cryptography", "algorithms", "science"]
+
+# Zero external dependencies: pure Rust std clean-room Apache-2.0 implementation.
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "fedverify-bench"
+path = "src/bin/fedverify-bench.rs"

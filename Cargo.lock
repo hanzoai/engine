@@ -3394,6 +3394,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-fedverify"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-film"
 version = "1.7.109"
 dependencies = [
