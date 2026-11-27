@@ -1,0 +1,23 @@
+# Copyright 2026 Hanzo AI, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "hanzo-poai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+repository.workspace = true
+description = "Proof of AI (HIP-1350): deterministic packed low-bit integer matrix-product execution profile and CPU-verifiable Freivalds probabilistic verifier over GF(2^61 - 1)."
+keywords = ["proof-of-ai", "freivalds", "quantization", "verification", "llm"]
+categories = ["cryptography", "mathematics", "science"]
+
+# Zero external dependencies: pure Rust std clean-room implementation.
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "poai-bench"
+path = "src/bin/poai-bench.rs"

@@ -3624,6 +3624,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-poai"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-pyo3"
 version = "1.7.109"
 dependencies = [

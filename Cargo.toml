@@ -23,6 +23,7 @@ members = [
     "hanzo-train",
     "hanzo-tokenizer",
     "hanzo-kv-fabric",
+    "hanzo-poai",
 ]
 resolver = "2"
 
@@ -231,6 +232,7 @@ hanzo-code-exec = { version = "1.7.41", path = "hanzo-code-exec" }
 hanzo-train = { version = "1.7.51", path = "hanzo-train" }
 hanzo-tokenizer = { version = "1.7.41", path = "hanzo-tokenizer" }
 hanzo-kv-fabric = { version = "1.7.41", path = "hanzo-kv-fabric" }
+hanzo-poai = { version = "1.7.109", path = "hanzo-poai" }
 hanzo-zap = { version = "0.2.1" }
 
 # Hanzo native-ML extension crates (federated training, quantization, zen5 inference)
