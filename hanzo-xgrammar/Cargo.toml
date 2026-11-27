@@ -1,0 +1,18 @@
+[package]
+name = "hanzo-xgrammar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license = "Apache-2.0"
+description = "Clean-room compiled grammar masks for constrained LLM generation (XGrammar / HIP-1346)"
+keywords = ["llm", "xgrammar", "constrained-decoding", "json-schema", "pda"]
+categories = ["parsing", "text-processing", "algorithms"]
+
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "xgrammar-bench"
+path = "src/bin/xgrammar-bench.rs"

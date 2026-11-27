@@ -1,0 +1,799 @@
+{
+  "benchmark": "hanzo-xgrammar",
+  "hip": "HIP-1346",
+  "issue": "hanzoai/engine#89",
+  "seed": 13462026,
+  "trials_per_workload": 20,
+  "max_recursion_depth": 64,
+  "max_active_stacks": 256,
+  "vocabularies": [
+    {
+      "vocab_size": 32768,
+      "trie_nodes": 103365,
+      "vocab_build_ms": 49.97,
+      "mean_token_bytes": 8.34,
+      "space_prefixed_pct": 34.812,
+      "quote_containing_pct": 21.506,
+      "multibyte_utf8_tokens": 12,
+      "bit_exact_parity_steps_checked": 984,
+      "bit_exact_parity_mismatches": 0,
+      "cache_simulation": {
+        "requests": 100,
+        "hits": 90,
+        "misses": 10,
+        "evictions": 0,
+        "hit_rate_pct": 90.0,
+        "mean_warm_lookup_us": 2.551,
+        "cache_entries": 10,
+        "total_cache_memory_kb": 3971.188
+      },
+      "workloads": [
+        {
+          "id": "json_api_response",
+          "category": "positive_cached",
+          "description": "REST API JSON response with nested item array and strict schema",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 90,
+          "num_rules": 32,
+          "num_leaf_positions": 183,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 321.085,
+          "memory_footprint_kb": 382.08,
+          "static_context_independent_pct": 99.365,
+          "static_context_dependent_pct": 0.635,
+          "runtime_pda_checks_mean": 875.722,
+          "runtime_pda_checks_pct_of_vocab": 2.672,
+          "runtime_context_dependent_tokens_mean": 2305.233,
+          "naive_step_latency_us": {
+            "mean": 23325.536,
+            "p50": 4954.345,
+            "p95": 59621.022,
+            "p99": 61235.692
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 261.112,
+            "p50": 226.997,
+            "p95": 584.415,
+            "p99": 904.137
+          },
+          "mask_speedup_ratio": 89.331,
+          "oneshot_e2e_speedup_ratio": 6.092,
+          "pure_mask_tok_per_sec": {
+            "naive": 42.871,
+            "xgrammar": 3829.77
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 39.486,
+            "xgrammar_warm_cache": 442.26,
+            "xgrammar_cold_oneshot": 171.564
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 35.304,
+            "xgrammar_warm_cache": 190.074,
+            "xgrammar_cold_oneshot": 113.267
+          }
+        },
+        {
+          "id": "nested_mcp_tool_call",
+          "category": "positive_cached",
+          "description": "5-tool OpenAI/MCP envelope (anyOf) with nested strict arguments",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 56,
+          "num_rules": 92,
+          "num_leaf_positions": 506,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 379.146,
+          "memory_footprint_kb": 756.797,
+          "static_context_independent_pct": 99.502,
+          "static_context_dependent_pct": 0.498,
+          "runtime_pda_checks_mean": 630.607,
+          "runtime_pda_checks_pct_of_vocab": 1.924,
+          "runtime_context_dependent_tokens_mean": 1644.464,
+          "naive_step_latency_us": {
+            "mean": 15417.539,
+            "p50": 3401.614,
+            "p95": 49816.596,
+            "p99": 49967.645
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 140.248,
+            "p50": 13.716,
+            "p95": 439.282,
+            "p99": 466.063
+          },
+          "mask_speedup_ratio": 109.931,
+          "oneshot_e2e_speedup_ratio": 2.231,
+          "pure_mask_tok_per_sec": {
+            "naive": 64.861,
+            "xgrammar": 7130.23
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 57.413,
+            "xgrammar_warm_cache": 467.236,
+            "xgrammar_cold_oneshot": 112.224
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 48.977,
+            "xgrammar_warm_cache": 194.543,
+            "xgrammar_cold_oneshot": 83.958
+          }
+        },
+        {
+          "id": "recursive_ast_tree",
+          "category": "positive_cached",
+          "description": "Recursive $defs/$ref AST tree schema exercising non-tail PDA stack nesting",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 88,
+          "num_rules": 26,
+          "num_leaf_positions": 156,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 321.235,
+          "memory_footprint_kb": 353.557,
+          "static_context_independent_pct": 99.315,
+          "static_context_dependent_pct": 0.685,
+          "runtime_pda_checks_mean": 551.818,
+          "runtime_pda_checks_pct_of_vocab": 1.684,
+          "runtime_context_dependent_tokens_mean": 1067.818,
+          "naive_step_latency_us": {
+            "mean": 10598.379,
+            "p50": 4348.143,
+            "p95": 55511.984,
+            "p99": 61230.514
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 144.452,
+            "p50": 29.579,
+            "p95": 520.408,
+            "p99": 577.938
+          },
+          "mask_speedup_ratio": 73.369,
+          "oneshot_e2e_speedup_ratio": 2.793,
+          "pure_mask_tok_per_sec": {
+            "naive": 94.354,
+            "xgrammar": 6922.699
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 79.375,
+            "xgrammar_warm_cache": 466.32,
+            "xgrammar_cold_oneshot": 172.567
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 64.109,
+            "xgrammar_warm_cache": 194.384,
+            "xgrammar_cold_oneshot": 113.703
+          }
+        },
+        {
+          "id": "strict_enum_classification",
+          "category": "positive_cached",
+          "description": "12-class strict enum classification with rationale string",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 46,
+          "num_rules": 23,
+          "num_leaf_positions": 278,
+          "max_active_stacks": 12,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 356.232,
+          "memory_footprint_kb": 452.759,
+          "static_context_independent_pct": 99.498,
+          "static_context_dependent_pct": 0.502,
+          "runtime_pda_checks_mean": 1083.087,
+          "runtime_pda_checks_pct_of_vocab": 3.305,
+          "runtime_context_dependent_tokens_mean": 2975.087,
+          "naive_step_latency_us": {
+            "mean": 30907.021,
+            "p50": 54552.438,
+            "p95": 62671.841,
+            "p99": 64349.123
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 357.24,
+            "p50": 451.906,
+            "p95": 728.89,
+            "p99": 1235.116
+          },
+          "mask_speedup_ratio": 86.516,
+          "oneshot_e2e_speedup_ratio": 3.815,
+          "pure_mask_tok_per_sec": {
+            "naive": 32.355,
+            "xgrammar": 2799.24
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 30.389,
+            "xgrammar_warm_cache": 424.225,
+            "xgrammar_cold_oneshot": 98.996
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 27.85,
+            "xgrammar_warm_cache": 186.663,
+            "xgrammar_cold_oneshot": 76.328
+          }
+        },
+        {
+          "id": "large_20field_config",
+          "category": "positive_cached",
+          "description": "Large 20-field strict deployment config object (additionalProperties: false)",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 170,
+          "num_rules": 46,
+          "num_leaf_positions": 508,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 364.198,
+          "memory_footprint_kb": 705.971,
+          "static_context_independent_pct": 99.541,
+          "static_context_dependent_pct": 0.459,
+          "runtime_pda_checks_mean": 425.8,
+          "runtime_pda_checks_pct_of_vocab": 1.299,
+          "runtime_context_dependent_tokens_mean": 826.471,
+          "naive_step_latency_us": {
+            "mean": 8280.556,
+            "p50": 1731.831,
+            "p95": 56138.189,
+            "p99": 60346.29
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 128.677,
+            "p50": 10.355,
+            "p95": 504.101,
+            "p99": 669.805
+          },
+          "mask_speedup_ratio": 64.352,
+          "oneshot_e2e_speedup_ratio": 3.646,
+          "pure_mask_tok_per_sec": {
+            "naive": 120.765,
+            "xgrammar": 7771.403
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 97.271,
+            "xgrammar_warm_cache": 469.775,
+            "xgrammar_cold_oneshot": 234.136
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 75.298,
+            "xgrammar_warm_cache": 194.982,
+            "xgrammar_cold_oneshot": 137.532
+          }
+        },
+        {
+          "id": "neg_oneshot_ephemeral_16tok",
+          "category": "negative_regime_1_cold_oneshot",
+          "description": "Negative Regime #1: uncached one-shot 12-field schema with short ~16-token output where compile time dominates",
+          "is_negative_regime": true,
+          "cold_oneshot": true,
+          "decode_steps": 15,
+          "num_rules": 58,
+          "num_leaf_positions": 242,
+          "max_active_stacks": 6,
+          "invalid_output_rate_pct": {
+            "unconstrained": 80.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 332.709,
+          "memory_footprint_kb": 493.492,
+          "static_context_independent_pct": 99.327,
+          "static_context_dependent_pct": 0.673,
+          "runtime_pda_checks_mean": 469.4,
+          "runtime_pda_checks_pct_of_vocab": 1.432,
+          "runtime_context_dependent_tokens_mean": 469.4,
+          "naive_step_latency_us": {
+            "mean": 2589.807,
+            "p50": 1649.113,
+            "p95": 6359.881,
+            "p99": 7264.396
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 72.673,
+            "p50": 7.744,
+            "p95": 213.42,
+            "p99": 383.266
+          },
+          "mask_speedup_ratio": 35.636,
+          "oneshot_e2e_speedup_ratio": 0.116,
+          "pure_mask_tok_per_sec": {
+            "naive": 386.129,
+            "xgrammar": 13760.256
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 217.874,
+            "xgrammar_warm_cache": 482.469,
+            "xgrammar_cold_oneshot": 41.232
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 131.756,
+            "xgrammar_warm_cache": 197.135,
+            "xgrammar_cold_oneshot": 36.693
+          }
+        },
+        {
+          "id": "neg_ambiguous_context_heavy",
+          "category": "negative_regime_2_context_heavy",
+          "description": "Negative Regime #2: context-heavy un-inlined short-rule nested expression CFG with high context-dependent token fraction",
+          "is_negative_regime": true,
+          "cold_oneshot": false,
+          "decode_steps": 27,
+          "num_rules": 3,
+          "num_leaf_positions": 4,
+          "max_active_stacks": 3,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 35.968,
+          "memory_footprint_kb": 190.732,
+          "static_context_independent_pct": 83.161,
+          "static_context_dependent_pct": 16.839,
+          "runtime_pda_checks_mean": 18146.185,
+          "runtime_pda_checks_pct_of_vocab": 55.378,
+          "runtime_context_dependent_tokens_mean": 20768.185,
+          "naive_step_latency_us": {
+            "mean": 44128.849,
+            "p50": 52319.656,
+            "p95": 55990.125,
+            "p99": 56615.172
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 29750.454,
+            "p50": 30987.325,
+            "p95": 32795.066,
+            "p99": 34028.381
+          },
+          "mask_speedup_ratio": 1.483,
+          "oneshot_e2e_speedup_ratio": 1.42,
+          "pure_mask_tok_per_sec": {
+            "naive": 22.661,
+            "xgrammar": 33.613
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 21.678,
+            "xgrammar_warm_cache": 31.496,
+            "xgrammar_cold_oneshot": 30.227
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 20.355,
+            "xgrammar_warm_cache": 28.777,
+            "xgrammar_cold_oneshot": 27.714
+          }
+        }
+      ]
+    },
+    {
+      "vocab_size": 128256,
+      "trie_nodes": 421897,
+      "vocab_build_ms": 251.605,
+      "mean_token_bytes": 9.537,
+      "space_prefixed_pct": 35.522,
+      "quote_containing_pct": 8.506,
+      "multibyte_utf8_tokens": 12,
+      "bit_exact_parity_steps_checked": 976,
+      "bit_exact_parity_mismatches": 0,
+      "cache_simulation": {
+        "requests": 100,
+        "hits": 90,
+        "misses": 10,
+        "evictions": 0,
+        "hit_rate_pct": 90.0,
+        "mean_warm_lookup_us": 1.799,
+        "cache_entries": 10,
+        "total_cache_memory_kb": 5634.957
+      },
+      "workloads": [
+        {
+          "id": "json_api_response",
+          "category": "positive_cached",
+          "description": "REST API JSON response with nested item array and strict schema",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 90,
+          "num_rules": 32,
+          "num_leaf_positions": 183,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 1343.855,
+          "memory_footprint_kb": 548.441,
+          "static_context_independent_pct": 99.782,
+          "static_context_dependent_pct": 0.218,
+          "runtime_pda_checks_mean": 876.1,
+          "runtime_pda_checks_pct_of_vocab": 0.683,
+          "runtime_context_dependent_tokens_mean": 3297.278,
+          "naive_step_latency_us": {
+            "mean": 93062.366,
+            "p50": 14990.713,
+            "p95": 246809.074,
+            "p99": 251527.736
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 366.61,
+            "p50": 305.768,
+            "p95": 873.684,
+            "p99": 892.47
+          },
+          "mask_speedup_ratio": 253.846,
+          "oneshot_e2e_speedup_ratio": 6.083,
+          "pure_mask_tok_per_sec": {
+            "naive": 10.745,
+            "xgrammar": 2727.693
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 10.519,
+            "xgrammar_warm_cache": 422.545,
+            "xgrammar_cold_oneshot": 57.809
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 10.198,
+            "xgrammar_warm_cache": 186.337,
+            "xgrammar_cold_oneshot": 49.265
+          }
+        },
+        {
+          "id": "nested_mcp_tool_call",
+          "category": "positive_cached",
+          "description": "5-tool OpenAI/MCP envelope (anyOf) with nested strict arguments",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 55,
+          "num_rules": 92,
+          "num_leaf_positions": 506,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 1328.25,
+          "memory_footprint_kb": 923.189,
+          "static_context_independent_pct": 99.853,
+          "static_context_dependent_pct": 0.147,
+          "runtime_pda_checks_mean": 642.309,
+          "runtime_pda_checks_pct_of_vocab": 0.501,
+          "runtime_context_dependent_tokens_mean": 2390.509,
+          "naive_step_latency_us": {
+            "mean": 69742.157,
+            "p50": 11346.72,
+            "p95": 227610.582,
+            "p99": 232972.939
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 200.72,
+            "p50": 45.239,
+            "p95": 635.859,
+            "p99": 661.05
+          },
+          "mask_speedup_ratio": 347.46,
+          "oneshot_e2e_speedup_ratio": 2.864,
+          "pure_mask_tok_per_sec": {
+            "naive": 14.339,
+            "xgrammar": 4982.071
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 13.939,
+            "xgrammar_warm_cache": 454.397,
+            "xgrammar_cold_oneshot": 37.95
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 13.379,
+            "xgrammar_warm_cache": 192.281,
+            "xgrammar_cold_oneshot": 34.071
+          }
+        },
+        {
+          "id": "recursive_ast_tree",
+          "category": "positive_cached",
+          "description": "Recursive $defs/$ref AST tree schema exercising non-tail PDA stack nesting",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 88,
+          "num_rules": 26,
+          "num_leaf_positions": 156,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 1248.438,
+          "memory_footprint_kb": 519.918,
+          "static_context_independent_pct": 99.759,
+          "static_context_dependent_pct": 0.241,
+          "runtime_pda_checks_mean": 532.193,
+          "runtime_pda_checks_pct_of_vocab": 0.415,
+          "runtime_context_dependent_tokens_mean": 1333.318,
+          "naive_step_latency_us": {
+            "mean": 40645.273,
+            "p50": 14573.283,
+            "p95": 242520.642,
+            "p99": 255295.41
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 194.237,
+            "p50": 53.548,
+            "p95": 652.911,
+            "p99": 855.841
+          },
+          "mask_speedup_ratio": 209.257,
+          "oneshot_e2e_speedup_ratio": 2.826,
+          "pure_mask_tok_per_sec": {
+            "naive": 24.603,
+            "xgrammar": 5148.36
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 23.449,
+            "xgrammar_warm_cache": 455.739,
+            "xgrammar_cold_oneshot": 61.046
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 21.908,
+            "xgrammar_warm_cache": 192.521,
+            "xgrammar_cold_oneshot": 51.597
+          }
+        },
+        {
+          "id": "strict_enum_classification",
+          "category": "positive_cached",
+          "description": "12-class strict enum classification with rationale string",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 47,
+          "num_rules": 23,
+          "num_leaf_positions": 278,
+          "max_active_stacks": 13,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 1254.64,
+          "memory_footprint_kb": 619.151,
+          "static_context_independent_pct": 99.835,
+          "static_context_dependent_pct": 0.165,
+          "runtime_pda_checks_mean": 1030.617,
+          "runtime_pda_checks_pct_of_vocab": 0.804,
+          "runtime_context_dependent_tokens_mean": 4166.936,
+          "naive_step_latency_us": {
+            "mean": 129292.55,
+            "p50": 77442.286,
+            "p95": 258603.446,
+            "p99": 262767.243
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 357.538,
+            "p50": 351.297,
+            "p95": 785.282,
+            "p99": 993.944
+          },
+          "mask_speedup_ratio": 361.619,
+          "oneshot_e2e_speedup_ratio": 4.779,
+          "pure_mask_tok_per_sec": {
+            "naive": 7.734,
+            "xgrammar": 2796.906
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 7.617,
+            "xgrammar_warm_cache": 424.171,
+            "xgrammar_cold_oneshot": 34.421
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 7.446,
+            "xgrammar_warm_cache": 186.653,
+            "xgrammar_cold_oneshot": 31.199
+          }
+        },
+        {
+          "id": "large_20field_config",
+          "category": "positive_cached",
+          "description": "Large 20-field strict deployment config object (additionalProperties: false)",
+          "is_negative_regime": false,
+          "cold_oneshot": false,
+          "decode_steps": 167,
+          "num_rules": 46,
+          "num_leaf_positions": 508,
+          "max_active_stacks": 11,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 1314.641,
+          "memory_footprint_kb": 872.426,
+          "static_context_independent_pct": 99.863,
+          "static_context_dependent_pct": 0.137,
+          "runtime_pda_checks_mean": 433.725,
+          "runtime_pda_checks_pct_of_vocab": 0.338,
+          "runtime_context_dependent_tokens_mean": 1124.527,
+          "naive_step_latency_us": {
+            "mean": 35207.179,
+            "p50": 6399.306,
+            "p95": 250593.962,
+            "p99": 265821.504
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 155.647,
+            "p50": 21.935,
+            "p95": 646.47,
+            "p99": 703.01
+          },
+          "mask_speedup_ratio": 226.199,
+          "oneshot_e2e_speedup_ratio": 4.386,
+          "pure_mask_tok_per_sec": {
+            "naive": 28.403,
+            "xgrammar": 6424.784
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 26.877,
+            "xgrammar_warm_cache": 463.898,
+            "xgrammar_cold_oneshot": 99.723
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 24.871,
+            "xgrammar_warm_cache": 193.962,
+            "xgrammar_cold_oneshot": 76.759
+          }
+        },
+        {
+          "id": "neg_oneshot_ephemeral_16tok",
+          "category": "negative_regime_1_cold_oneshot",
+          "description": "Negative Regime #1: uncached one-shot 12-field schema with short ~16-token output where compile time dominates",
+          "is_negative_regime": true,
+          "cold_oneshot": true,
+          "decode_steps": 15,
+          "num_rules": 58,
+          "num_leaf_positions": 242,
+          "max_active_stacks": 6,
+          "invalid_output_rate_pct": {
+            "unconstrained": 80.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 1255.131,
+          "memory_footprint_kb": 659.9,
+          "static_context_independent_pct": 99.786,
+          "static_context_dependent_pct": 0.214,
+          "runtime_pda_checks_mean": 469.4,
+          "runtime_pda_checks_pct_of_vocab": 0.366,
+          "runtime_context_dependent_tokens_mean": 469.4,
+          "naive_step_latency_us": {
+            "mean": 10985.501,
+            "p50": 6006.295,
+            "p95": 25480.676,
+            "p99": 29014.927
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 124.838,
+            "p50": 20.075,
+            "p95": 369.429,
+            "p99": 459.381
+          },
+          "mask_speedup_ratio": 87.998,
+          "oneshot_e2e_speedup_ratio": 0.131,
+          "pure_mask_tok_per_sec": {
+            "naive": 91.029,
+            "xgrammar": 8010.369
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 77.009,
+            "xgrammar_warm_cache": 470.624,
+            "xgrammar_cold_oneshot": 11.655
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 62.557,
+            "xgrammar_warm_cache": 195.128,
+            "xgrammar_cold_oneshot": 11.261
+          }
+        },
+        {
+          "id": "neg_ambiguous_context_heavy",
+          "category": "negative_regime_2_context_heavy",
+          "description": "Negative Regime #2: context-heavy un-inlined short-rule nested expression CFG with high context-dependent token fraction",
+          "is_negative_regime": true,
+          "cold_oneshot": false,
+          "decode_steps": 26,
+          "num_rules": 3,
+          "num_leaf_positions": 4,
+          "max_active_stacks": 3,
+          "invalid_output_rate_pct": {
+            "unconstrained": 100.0,
+            "naive_constrained": 0.0,
+            "xgrammar_compiled": 0.0
+          },
+          "compile_time_ms": 243.744,
+          "memory_footprint_kb": 924.054,
+          "static_context_independent_pct": 82.534,
+          "static_context_dependent_pct": 17.466,
+          "runtime_pda_checks_mean": 82925.077,
+          "runtime_pda_checks_pct_of_vocab": 64.656,
+          "runtime_context_dependent_tokens_mean": 85630.077,
+          "naive_step_latency_us": {
+            "mean": 233889.558,
+            "p50": 272485.083,
+            "p95": 283313.135,
+            "p99": 285028.72
+          },
+          "xgrammar_step_latency_us": {
+            "mean": 186557.591,
+            "p50": 189567.69,
+            "p95": 197838.434,
+            "p99": 200437.344
+          },
+          "mask_speedup_ratio": 1.254,
+          "oneshot_e2e_speedup_ratio": 1.194,
+          "pure_mask_tok_per_sec": {
+            "naive": 4.276,
+            "xgrammar": 5.36
+          },
+          "effective_tok_per_sec_at_2ms_llm": {
+            "unconstrained": 500.0,
+            "naive": 4.239,
+            "xgrammar_warm_cache": 5.303,
+            "xgrammar_cold_oneshot": 5.052
+          },
+          "effective_tok_per_sec_at_5ms_llm": {
+            "unconstrained": 200.0,
+            "naive": 4.186,
+            "xgrammar_warm_cache": 5.22,
+            "xgrammar_cold_oneshot": 4.977
+          }
+        }
+      ]
+    }
+  ]
+}
