@@ -72,8 +72,8 @@ pub use license::{
     load_and_verify as load_and_verify_license, verify_license, License, LicenseError,
     EXPECTED_APP_ID as LICENSE_EXPECTED_APP_ID, HANZO_LICENSE_PUBKEY,
 };
-mod search;
 pub mod resonance;
+mod search;
 
 mod model_selected;
 pub use model_selected::ModelSelected;

@@ -143,7 +143,10 @@ impl Model {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn graph_single_seq_only(&self) -> bool {
-        matches!(self, Model::Qwen35(_) | Model::Qwen3MoE(_) | Model::Deepseek2(_))
+        matches!(
+            self,
+            Model::Qwen35(_) | Model::Qwen3MoE(_) | Model::Deepseek2(_)
+        )
     }
 
     /// The model's self-speculative capability, if it carries an MTP head. This is
@@ -1341,7 +1344,10 @@ impl MetadataMixin for GGUFPipeline {
         {
             // The engine calls cleanup while its CUDA worker is still alive.
             // Report the observed path, not just the CUDA_GRAPHS env toggle.
-            let mut state = self.cuda_decode_graph.lock().expect("CUDA graph mutex poisoned");
+            let mut state = self
+                .cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned");
             info!(
                 "cuda_decode_graph summary: model={} eligible={} enabled={} single_seq_only={} captures={} replays={} evictions={} eager_steps={} disabled={}",
                 self.model.variant_name(),
