@@ -1,0 +1,20 @@
+[package]
+name = "hanzo-prefixcache"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+repository.workspace = true
+rust-version.workspace = true
+description = "Persistent, shareable multi-tier prefix cache with RadixAttention, versioned KV+GDN snapshots, tenant isolation, and prefix-aware scheduling (HIP-1346)"
+keywords = ["llm", "prefix-cache", "radix-attention", "kv-cache", "gdn"]
+categories = ["caching", "science"]
+
+# Zero external crate dependencies by design (clean-room std-only Apache-2.0).
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "prefixcache-bench"
+path = "src/bin/prefixcache-bench.rs"
