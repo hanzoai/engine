@@ -1,0 +1,23 @@
+# Copyright 2026 Hanzo AI, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "hanzo-opai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+repository.workspace = true
+description = "Optimistic AI execution and interactive O(log2 T) bisection fraud-proof games (HIP-1350): deterministic fixed-point step-trace VM, canonical SHA-256 state & Merkle commitments, permissionless challenger games with timeout/slashing/anti-griefing, and sovereign third-party transcript replay."
+keywords = ["optimistic-ai", "fraud-proof", "bisection", "proof-of-ai", "deterministic"]
+categories = ["cryptography", "algorithms", "science"]
+
+# Zero external dependencies: pure Rust std clean-room implementation.
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "opai-bench"
+path = "src/bin/opai-bench.rs"

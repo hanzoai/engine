@@ -1,0 +1,809 @@
+{
+  "schema": "hanzo.opai.hip1350.results.v1",
+  "issue": "hanzoai/engine#67",
+  "seed": 1350,
+  "profile_id": "opai.det.zen-kai.v1",
+  "profile_digest": "b873434bc9b87caa2b3967e90aea8ec1480b8004cbd03c826e3d339805780f41",
+  "model_digest": "46f3426f513d5a377e6ff7415e2f9f79f25672105b57c760077dc1efa8efc1a3",
+  "reference_vcpu_usd_per_hour": 0.0500,
+  "pinned_repo_inputs": [
+    {"path": "calibration_data/calibration_datav3_small.txt", "bytes": 133837, "sha256": "aabd956dba34ff31f40e78b9de4e234fdd4865f90ba231e8e3deec8dfb22cbc0"},
+    {"path": "chat_templates/llama3.json", "bytes": 420, "sha256": "67d1d402738727aa3059d28590fa3488c44740a358be4b5c2135c60f58ec9d7a"},
+    {"path": "orderings/xlora-paper-ordering.json", "bytes": 6485, "sha256": "8d0650ea231eeade0b97e5c026411365ff9feed41b2b07ecf10853c2a399043a"}
+  ],
+  "matched_regime_sweeps": [
+    {
+      "regime": "unverified_optimistic_control",
+      "scenario": "fraud_0pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0072,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0072,
+        "verification_cost_ratio": 0.0000
+      },
+      "performance": {
+        "ttft_ms": 0.5215,
+        "throughput_tok_per_sec": 1917.6874,
+        "optimistic_settlement_latency_secs": 0.0021,
+        "disputed_settlement_latency_secs": 0.0021,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": null
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 0.00,
+        "timeout_forfeits_enforced_pct": 0.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": false,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "full_reexecution_every_claim",
+      "scenario": "fraud_0pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0072,
+        "verification_usd_per_1m_tokens": 0.0067,
+        "total_usd_per_1m_tokens": 0.0140,
+        "verification_cost_ratio": 0.9271
+      },
+      "performance": {
+        "ttft_ms": 0.5215,
+        "throughput_tok_per_sec": 995.1364,
+        "optimistic_settlement_latency_secs": 0.0040,
+        "disputed_settlement_latency_secs": 0.0040,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 1933.7037,
+        "verification_speedup_vs_full": 1.0000
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "hanzo_opai_bisection_game",
+      "scenario": "fraud_0pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0072,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0073,
+        "verification_cost_ratio": 0.0015
+      },
+      "performance": {
+        "ttft_ms": 0.5215,
+        "throughput_tok_per_sec": 1914.7775,
+        "optimistic_settlement_latency_secs": 600.0000,
+        "disputed_settlement_latency_secs": 600.0000,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 8,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": 610.0281
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 100.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 100.00,
+        "third_party_replay_pass_pct": 100.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "unverified_optimistic_control",
+      "scenario": "fraud_1pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0066,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0066,
+        "verification_cost_ratio": 0.0000
+      },
+      "performance": {
+        "ttft_ms": 0.4765,
+        "throughput_tok_per_sec": 2098.5319,
+        "optimistic_settlement_latency_secs": 0.0019,
+        "disputed_settlement_latency_secs": 0.0019,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": null
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 0.00,
+        "malicious_challenges_defeated_pct": 0.00,
+        "timeout_forfeits_enforced_pct": 0.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": false,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "full_reexecution_every_claim",
+      "scenario": "fraud_1pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0066,
+        "verification_usd_per_1m_tokens": 0.0064,
+        "total_usd_per_1m_tokens": 0.0130,
+        "verification_cost_ratio": 0.9676
+      },
+      "performance": {
+        "ttft_ms": 0.4765,
+        "throughput_tok_per_sec": 1066.5194,
+        "optimistic_settlement_latency_secs": 0.0038,
+        "disputed_settlement_latency_secs": 0.0038,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 1844.4233,
+        "verification_speedup_vs_full": 1.0000
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "hanzo_opai_bisection_game",
+      "scenario": "fraud_1pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0066,
+        "verification_usd_per_1m_tokens": 0.0001,
+        "total_usd_per_1m_tokens": 0.0068,
+        "verification_cost_ratio": 0.0215
+      },
+      "performance": {
+        "ttft_ms": 0.4765,
+        "throughput_tok_per_sec": 2054.2972,
+        "optimistic_settlement_latency_secs": 600.0000,
+        "disputed_settlement_latency_secs": 1.2000,
+        "mean_bisection_rounds": 7.0000,
+        "theoretical_max_rounds": 8,
+        "mean_single_step_judge_us": 15.3470,
+        "verification_speedup_vs_full": 44.9383
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 100.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 100.00,
+        "third_party_replay_pass_pct": 100.00,
+        "mean_wire_transcript_bytes": 2187.00,
+        "mean_json_transcript_bytes": 4794.00
+      }
+    },
+    {
+      "regime": "unverified_optimistic_control",
+      "scenario": "fraud_10pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.1000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0065,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0065,
+        "verification_cost_ratio": 0.0000
+      },
+      "performance": {
+        "ttft_ms": 0.4699,
+        "throughput_tok_per_sec": 2128.1752,
+        "optimistic_settlement_latency_secs": 0.0019,
+        "disputed_settlement_latency_secs": 0.0019,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": null
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 0.00,
+        "malicious_challenges_defeated_pct": 0.00,
+        "timeout_forfeits_enforced_pct": 0.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": false,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "full_reexecution_every_claim",
+      "scenario": "fraud_10pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.1000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0065,
+        "verification_usd_per_1m_tokens": 0.0065,
+        "total_usd_per_1m_tokens": 0.0130,
+        "verification_cost_ratio": 0.9901
+      },
+      "performance": {
+        "ttft_ms": 0.4699,
+        "throughput_tok_per_sec": 1069.3688,
+        "optimistic_settlement_latency_secs": 0.0037,
+        "disputed_settlement_latency_secs": 0.0037,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 1860.9798,
+        "verification_speedup_vs_full": 1.0000
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "hanzo_opai_bisection_game",
+      "scenario": "fraud_10pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.1000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0065,
+        "verification_usd_per_1m_tokens": 0.0013,
+        "total_usd_per_1m_tokens": 0.0079,
+        "verification_cost_ratio": 0.2043
+      },
+      "performance": {
+        "ttft_ms": 0.4699,
+        "throughput_tok_per_sec": 1767.1813,
+        "optimistic_settlement_latency_secs": 600.0000,
+        "disputed_settlement_latency_secs": 1.2640,
+        "mean_bisection_rounds": 7.4000,
+        "theoretical_max_rounds": 8,
+        "mean_single_step_judge_us": 16.0671,
+        "verification_speedup_vs_full": 4.8470
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 100.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 10,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 100.00,
+        "third_party_replay_pass_pct": 100.00,
+        "mean_wire_transcript_bytes": 2220.80,
+        "mean_json_transcript_bytes": 4827.40
+      }
+    },
+    {
+      "regime": "unverified_optimistic_control",
+      "scenario": "fraud_50pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.5000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0067,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0067,
+        "verification_cost_ratio": 0.0000
+      },
+      "performance": {
+        "ttft_ms": 0.4824,
+        "throughput_tok_per_sec": 2073.1733,
+        "optimistic_settlement_latency_secs": 0.0019,
+        "disputed_settlement_latency_secs": 0.0019,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": null
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 0.00,
+        "malicious_challenges_defeated_pct": 0.00,
+        "timeout_forfeits_enforced_pct": 0.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": false,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "full_reexecution_every_claim",
+      "scenario": "fraud_50pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.5000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0067,
+        "verification_usd_per_1m_tokens": 0.0065,
+        "total_usd_per_1m_tokens": 0.0132,
+        "verification_cost_ratio": 0.9637
+      },
+      "performance": {
+        "ttft_ms": 0.4824,
+        "throughput_tok_per_sec": 1055.7623,
+        "optimistic_settlement_latency_secs": 0.0038,
+        "disputed_settlement_latency_secs": 0.0038,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 1859.3223,
+        "verification_speedup_vs_full": 1.0000
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "hanzo_opai_bisection_game",
+      "scenario": "fraud_50pct_grief_0pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.5000,
+      "griefing_rate": 0.0000,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0067,
+        "verification_usd_per_1m_tokens": 0.0068,
+        "total_usd_per_1m_tokens": 0.0135,
+        "verification_cost_ratio": 1.0094
+      },
+      "performance": {
+        "ttft_ms": 0.4824,
+        "throughput_tok_per_sec": 1031.7141,
+        "optimistic_settlement_latency_secs": 600.0000,
+        "disputed_settlement_latency_secs": 1.2288,
+        "mean_bisection_rounds": 7.1800,
+        "theoretical_max_rounds": 8,
+        "mean_single_step_judge_us": 16.6957,
+        "verification_speedup_vs_full": 0.9547
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 100.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 16,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 100.00,
+        "third_party_replay_pass_pct": 100.00,
+        "mean_wire_transcript_bytes": 2203.28,
+        "mean_json_transcript_bytes": 4805.76
+      }
+    },
+    {
+      "regime": "unverified_optimistic_control",
+      "scenario": "fraud_1pct_grief_5pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.0500,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0068,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0068,
+        "verification_cost_ratio": 0.0000
+      },
+      "performance": {
+        "ttft_ms": 0.4910,
+        "throughput_tok_per_sec": 2036.6323,
+        "optimistic_settlement_latency_secs": 0.0020,
+        "disputed_settlement_latency_secs": 0.0020,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": null
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 0.00,
+        "malicious_challenges_defeated_pct": 0.00,
+        "timeout_forfeits_enforced_pct": 0.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": false,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "full_reexecution_every_claim",
+      "scenario": "fraud_1pct_grief_5pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.0500,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0068,
+        "verification_usd_per_1m_tokens": 0.0064,
+        "total_usd_per_1m_tokens": 0.0133,
+        "verification_cost_ratio": 0.9441
+      },
+      "performance": {
+        "ttft_ms": 0.4910,
+        "throughput_tok_per_sec": 1047.5711,
+        "optimistic_settlement_latency_secs": 0.0038,
+        "disputed_settlement_latency_secs": 0.0038,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 1854.3301,
+        "verification_speedup_vs_full": 1.0000
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "hanzo_opai_bisection_game",
+      "scenario": "fraud_1pct_grief_5pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.0500,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0068,
+        "verification_usd_per_1m_tokens": 0.0005,
+        "total_usd_per_1m_tokens": 0.0073,
+        "verification_cost_ratio": 0.0719
+      },
+      "performance": {
+        "ttft_ms": 0.4910,
+        "throughput_tok_per_sec": 1900.0102,
+        "optimistic_settlement_latency_secs": 600.0000,
+        "disputed_settlement_latency_secs": 1.2800,
+        "mean_bisection_rounds": 7.5000,
+        "theoretical_max_rounds": 8,
+        "mean_single_step_judge_us": 15.6142,
+        "verification_speedup_vs_full": 13.1303
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 100.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 6,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 100.00,
+        "third_party_replay_pass_pct": 100.00,
+        "mean_wire_transcript_bytes": 2226.50,
+        "mean_json_transcript_bytes": 4702.33
+      }
+    },
+    {
+      "regime": "unverified_optimistic_control",
+      "scenario": "fraud_1pct_grief_25pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.2500,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0072,
+        "verification_usd_per_1m_tokens": 0.0000,
+        "total_usd_per_1m_tokens": 0.0072,
+        "verification_cost_ratio": 0.0000
+      },
+      "performance": {
+        "ttft_ms": 0.5161,
+        "throughput_tok_per_sec": 1937.6112,
+        "optimistic_settlement_latency_secs": 0.0021,
+        "disputed_settlement_latency_secs": 0.0021,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 0.0000,
+        "verification_speedup_vs_full": null
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 0.00,
+        "malicious_challenges_defeated_pct": 0.00,
+        "timeout_forfeits_enforced_pct": 0.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": false,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 0,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "full_reexecution_every_claim",
+      "scenario": "fraud_1pct_grief_25pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.2500,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0072,
+        "verification_usd_per_1m_tokens": 0.0066,
+        "total_usd_per_1m_tokens": 0.0138,
+        "verification_cost_ratio": 0.9275
+      },
+      "performance": {
+        "ttft_ms": 0.5161,
+        "throughput_tok_per_sec": 1005.2351,
+        "optimistic_settlement_latency_secs": 0.0040,
+        "disputed_settlement_latency_secs": 0.0040,
+        "mean_bisection_rounds": 0.0000,
+        "theoretical_max_rounds": 0,
+        "mean_single_step_judge_us": 1914.7710,
+        "verification_speedup_vs_full": 1.0000
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 0.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 1,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 0.00,
+        "third_party_replay_pass_pct": 0.00,
+        "mean_wire_transcript_bytes": 0.00,
+        "mean_json_transcript_bytes": 0.00
+      }
+    },
+    {
+      "regime": "hanzo_opai_bisection_game",
+      "scenario": "fraud_1pct_grief_25pct",
+      "claims_evaluated": 100,
+      "steps_per_claim": 144,
+      "fraud_rate": 0.0100,
+      "griefing_rate": 0.2500,
+      "cost": {
+        "provider_usd_per_1m_tokens": 0.0072,
+        "verification_usd_per_1m_tokens": 0.0019,
+        "total_usd_per_1m_tokens": 0.0091,
+        "verification_cost_ratio": 0.2720
+      },
+      "performance": {
+        "ttft_ms": 0.5161,
+        "throughput_tok_per_sec": 1523.3056,
+        "optimistic_settlement_latency_secs": 600.0000,
+        "disputed_settlement_latency_secs": 1.2862,
+        "mean_bisection_rounds": 7.5385,
+        "theoretical_max_rounds": 8,
+        "mean_single_step_judge_us": 17.4810,
+        "verification_speedup_vs_full": 3.4103
+      },
+      "trust": {
+        "fraud_exact_pinpoint_pct": 100.00,
+        "malicious_challenges_defeated_pct": 100.00,
+        "timeout_forfeits_enforced_pct": 100.00,
+        "transcript_tamper_rejection_pct": 100.00
+      },
+      "decentralization": {
+        "permissionless_challengers": true,
+        "hanzo_control_plane_calls": 0,
+        "independent_challengers_exercised": 16,
+        "tee_assumed": false
+      },
+      "sovereignty": {
+        "lossless_transcript_roundtrip_pct": 100.00,
+        "third_party_replay_pass_pct": 100.00,
+        "mean_wire_transcript_bytes": 2227.38,
+        "mean_json_transcript_bytes": 4602.54
+      }
+    }
+  ],
+  "depth_scaling": [
+    {"num_layers": 2, "max_new_tokens": 1, "total_steps": 20, "theoretical_max_rounds": 5, "observed_rounds": 5, "full_trace_us": 535.137, "single_step_judge_us": 17.340, "judge_speedup_vs_full": 30.86, "wire_transcript_bytes": 2006, "json_transcript_bytes": 4077, "pinpointed_exact_step": true},
+    {"num_layers": 8, "max_new_tokens": 1, "total_steps": 68, "theoretical_max_rounds": 7, "observed_rounds": 6, "full_trace_us": 1457.767, "single_step_judge_us": 15.992, "judge_speedup_vs_full": 91.16, "wire_transcript_bytes": 2089, "json_transcript_bytes": 4338, "pinpointed_exact_step": true},
+    {"num_layers": 16, "max_new_tokens": 2, "total_steps": 264, "theoretical_max_rounds": 9, "observed_rounds": 8, "full_trace_us": 3849.324, "single_step_judge_us": 16.658, "judge_speedup_vs_full": 231.08, "wire_transcript_bytes": 2268, "json_transcript_bytes": 5059, "pinpointed_exact_step": true},
+    {"num_layers": 32, "max_new_tokens": 4, "total_steps": 1040, "theoretical_max_rounds": 11, "observed_rounds": 10, "full_trace_us": 14521.681, "single_step_judge_us": 19.899, "judge_speedup_vs_full": 729.76, "wire_transcript_bytes": 2441, "json_transcript_bytes": 5530, "pinpointed_exact_step": true}
+  ],
+  "negative_regimes": {
+    "high_dispute_100pct_challenge_storm": [
+      {"concurrent_challengers_per_claim": 1, "full_reexec_total_us": 37089.13, "opai_storm_total_us": 62278.60, "compute_overhead_vs_full_reexec": 1.679, "full_reexec_latency_ms": 1.854, "opai_storm_latency_ms": 1363.114, "malicious_challengers_slashed": 20, "honest_claims_finalized": 20, "conservation_verified": true},
+      {"concurrent_challengers_per_claim": 4, "full_reexec_total_us": 37089.13, "opai_storm_total_us": 241761.14, "compute_overhead_vs_full_reexec": 6.518, "full_reexec_latency_ms": 1.854, "opai_storm_latency_ms": 1372.088, "malicious_challengers_slashed": 80, "honest_claims_finalized": 20, "conservation_verified": true}
+    ],
+    "challenge_window_finality_delay": [
+      {"challenge_window_secs": 60, "full_reexec_finality_ms": 3.751, "optimistic_finality_ms": 60000.0, "finality_delay_ratio": 15997.8},
+      {"challenge_window_secs": 600, "full_reexec_finality_ms": 3.751, "optimistic_finality_ms": 600000.0, "finality_delay_ratio": 159977.9},
+      {"challenge_window_secs": 3600, "full_reexec_finality_ms": 3.751, "optimistic_finality_ms": 3600000.0, "finality_delay_ratio": 959867.5}
+    ],
+    "shallow_1_to_4_step_workloads": [
+      {"total_steps": 1, "full_reexec_us": 36.166, "opai_dispute_protocol_us": 119.664, "speedup_vs_full_reexec": 0.302, "wire_transcript_bytes": 1129},
+      {"total_steps": 2, "full_reexec_us": 43.588, "opai_dispute_protocol_us": 124.925, "speedup_vs_full_reexec": 0.349, "wire_transcript_bytes": 1215},
+      {"total_steps": 4, "full_reexec_us": 58.215, "opai_dispute_protocol_us": 131.927, "speedup_vs_full_reexec": 0.441, "wire_transcript_bytes": 1299}
+    ]
+  },
+  "security_audit": {
+    "injected_faults_tested": 7,
+    "exact_step_pinpointed": 7,
+    "malicious_challenges_tested": 2,
+    "malicious_challenges_slashed": 2,
+    "timeout_forfeits_tested": 3,
+    "timeout_forfeits_enforced": 3,
+    "tamper_cases_tested": 4,
+    "tamper_cases_rejected": 4,
+    "wire_roundtrip_passed": 6,
+    "json_roundtrip_passed": 6,
+    "sovereign_replays_passed": 6,
+    "sovereign_replays_total": 6,
+    "hanzo_control_plane_calls": 0
+  }
+}

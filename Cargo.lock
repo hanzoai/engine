@@ -3608,6 +3608,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-opai"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-paged-attn"
 version = "1.7.109"
 dependencies = [
