@@ -1,0 +1,16 @@
+[package]
+name = "hanzo-cacheslide"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+authors = ["Hanzo AI <dev@hanzo.ai>"]
+description = "Clean-room CacheSlide position-shifted KV segment reuse with RoPE relative rotation and selective boundary recomputation (HIP-1346 / engine#85)."
+license = "Apache-2.0"
+repository = "https://github.com/hanzoai/engine"
+
+[dependencies]
+# Zero external crate dependencies: pure Rust std only.
+
+[[bin]]
+name = "cacheslide-bench"
+path = "src/bin/cacheslide-bench.rs"

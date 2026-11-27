@@ -3194,6 +3194,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-cacheslide"
+version = "0.1.0"
+
+[[package]]
 name = "hanzo-cli"
 version = "1.7.109"
 dependencies = [
