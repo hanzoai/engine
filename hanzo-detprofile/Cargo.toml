@@ -1,0 +1,23 @@
+# Copyright 2026 Hanzo AI, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "hanzo-detprofile"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+repository.workspace = true
+description = "Deterministic AI execution profiles (HIP-1350, det.zen-kai.v1): exact integer & dyadic fixed-point Zen/Kai operators, explicit floating-point exclusion gate, canonical serialization, SHA-256 commitments, and independent CPU/SIMD/GPU-warp reference backends."
+keywords = ["deterministic", "proof-of-ai", "quantization", "fixed-point", "reproducibility"]
+categories = ["science", "mathematics", "cryptography"]
+
+# Zero external dependencies: pure Rust std clean-room implementation.
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "detprofile-bench"
+path = "src/bin/detprofile-bench.rs"
