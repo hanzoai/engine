@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-diloco-train"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room permissionless internet-scale elastic low-communication LoRA training runtime: two-level inner-AdamW / outer-Nesterov optimization, live multi-node TCP cluster with WAN shaping, worker churn and VFS checkpoint recovery, and Byzantine-robust aggregation (HIP-1350)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["distributed-training", "lora", "decentralized", "byzantine-robust", "checkpointing"]
+categories = ["network-programming", "science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "diloco-bench"
+path = "src/bin/diloco-bench.rs"
