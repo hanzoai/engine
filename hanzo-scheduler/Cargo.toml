@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room continuous batching, chunked prefill, paged KV/GDN admission control, and latency-aware SLO scheduling for hybrid Transformer + GDN inference (HIP-1346)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["scheduler", "continuous-batching", "chunked-prefill", "paged-attention", "llm"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "scheduler-bench"
+path = "src/bin/scheduler_bench.rs"
