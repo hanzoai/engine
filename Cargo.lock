@@ -3151,6 +3151,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-attest"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-audio"
 version = "1.7.109"
 dependencies = [

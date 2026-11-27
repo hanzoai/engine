@@ -1,0 +1,23 @@
+[package]
+name = "hanzo-attest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+description = "Provider-independent confidential GPU inference remote attestation verifier and authenticated request binder (HIP-1350)."
+keywords = ["attestation", "confidential-computing", "tee", "ed25519", "x25519"]
+categories = ["cryptography", "network-programming", "science"]
+
+# Zero external crate dependencies: pure Rust std for offline builds,
+# minimal TCB/audit surface, and sovereign independent verification.
+[dependencies]
+
+[lib]
+name = "hanzo_attest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "attest-bench"
+path = "src/bin/attest-bench.rs"

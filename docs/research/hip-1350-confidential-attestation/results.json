@@ -1,0 +1,510 @@
+{
+  "benchmark": "hip-1350-confidential-gpu-attestation",
+  "corpus_digest_sha256": "87b2eed8504ef25d8837ca4338e4d06eafcab4d8d31c60e7c81e5dfc50e0d1af",
+  "corpus_files": [
+    {
+      "bytes": 7599,
+      "path": "Cargo.toml",
+      "sha256": "4d08171065e8a5437f3811339dc6a271d38da91c090db4b1fee4308ed72a085a"
+    },
+    {
+      "bytes": 17522,
+      "path": "README.md",
+      "sha256": "7377fe2c3636a05c19f39f8d5ddfb583a41787ebe7599ca6d7c6338f4c73b644"
+    },
+    {
+      "bytes": 2123,
+      "path": "hanzo.yml",
+      "sha256": "b2d7f0c1d940be70312e30e557df091f2084801bfac034689d4810277730a63f"
+    },
+    {
+      "bytes": 5962,
+      "path": "HANZO_ENGINE_INTEGRATION.md",
+      "sha256": "a7fd060907d9ca248b3903fb344667a953d0bf2a35b000864de8e6bd93e7657c"
+    },
+    {
+      "bytes": 91742,
+      "path": "hanzo-engine/src/lib.rs",
+      "sha256": "80dc78ffb9493ed0dc95ae9f336dee3bebb7fe61adab31eaf14231ce47e7a7f5"
+    },
+    {
+      "bytes": 16942,
+      "path": "hanzo-engine/src/distributed.rs",
+      "sha256": "16ab2495b39700fc269d6a0181501e12c1e724a8a184e4d5422807b19e76f19a"
+    },
+    {
+      "bytes": 79949,
+      "path": "hanzo-engine/src/kv_cache/phase_policy.rs",
+      "sha256": "83c154794e9b3cc976f0da1550454fce0d2ed955582797507067049d551cd5ad"
+    },
+    {
+      "bytes": 24834,
+      "path": "hanzo-engine/src/models/llama.rs",
+      "sha256": "34dd4d6df92201d472624bef4a67dedf30871a90ab03948f27d8bb2dc228fb4f"
+    }
+  ],
+  "differential_matrix": [
+    {
+      "case": "valid_nvidia_cc_h100",
+      "error_code": "",
+      "exact_parity": true,
+      "expected_ok": true,
+      "python_ok": true,
+      "rust_ok": true
+    },
+    {
+      "case": "valid_amd_sev_snp",
+      "error_code": "",
+      "exact_parity": true,
+      "expected_ok": true,
+      "python_ok": true,
+      "rust_ok": true
+    },
+    {
+      "case": "valid_intel_tdx",
+      "error_code": "",
+      "exact_parity": true,
+      "expected_ok": true,
+      "python_ok": true,
+      "rust_ok": true
+    },
+    {
+      "case": "forged_root_signature",
+      "error_code": "INVALID_PLATFORM_CERT_SIGNATURE",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "untrusted_root_id",
+      "error_code": "UNTRUSTED_ROOT",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "revoked_root_key",
+      "error_code": "ROOT_REVOKED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "expired_root_cert",
+      "error_code": "ROOT_EXPIRED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "disallowed_tee_platform",
+      "error_code": "PLATFORM_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "revoked_platform_cert",
+      "error_code": "PLATFORM_CERT_REVOKED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "revoked_device_id",
+      "error_code": "DEVICE_REVOKED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "expired_platform_cert",
+      "error_code": "PLATFORM_CERT_EXPIRED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "quote_cert_id_mismatch",
+      "error_code": "QUOTE_CERT_ID_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "forged_quote_signature",
+      "error_code": "INVALID_QUOTE_SIGNATURE",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "malleable_ed25519_s_ge_l",
+      "error_code": "INVALID_QUOTE_SIGNATURE",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "debug_mode_enabled",
+      "error_code": "DEBUG_MODE_ENABLED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "secure_boot_disabled",
+      "error_code": "SECURE_BOOT_DISABLED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "memory_encryption_disabled",
+      "error_code": "MEMORY_ENCRYPTION_DISABLED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "tcb_downgrade",
+      "error_code": "TCB_VERSION_TOO_LOW",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "tcb_cert_mismatch",
+      "error_code": "TCB_CERT_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "rtmr_runtime_mismatch",
+      "error_code": "MEASUREMENT_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "swapped_model_id",
+      "error_code": "MODEL_ID_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "swapped_model_weights",
+      "error_code": "MODEL_WEIGHTS_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "swapped_tokenizer",
+      "error_code": "TOKENIZER_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "swapped_workload_policy",
+      "error_code": "WORKLOAD_POLICY_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "stale_expired_quote",
+      "error_code": "QUOTE_EXPIRED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "quote_exceeds_max_age",
+      "error_code": "QUOTE_TOO_OLD",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "wrong_client_nonce",
+      "error_code": "NONCE_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "replayed_client_nonce",
+      "error_code": "NONCE_REPLAYED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "stale_revocation_epoch",
+      "error_code": "REVOCATION_EPOCH_STALE",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "mitm_unbound_ephemeral_x25519",
+      "error_code": "REPORT_DATA_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "low_order_x25519_point",
+      "error_code": "INVALID_EPHEMERAL_KEY",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "tampered_aead_ciphertext",
+      "error_code": "AEAD_AUTH_FAILED",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    },
+    {
+      "case": "swapped_aad_model_binding",
+      "error_code": "BINDING_HEADER_MISMATCH",
+      "exact_parity": true,
+      "expected_ok": false,
+      "python_ok": false,
+      "rust_ok": false
+    }
+  ],
+  "issue": "hanzoai/engine#69",
+  "model_class_five_axis": [
+    {
+      "adversarial_rejection_pct": 0,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 413.889,
+      "hanzo_control_plane_calls": 0,
+      "mode": "plaintext_unattested_control",
+      "model_class": "4B",
+      "ttft_ms": 18,
+      "usd_per_1m_useful_tokens": 1.6711
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 396.042,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_rust_session_1000x",
+      "model_class": "4B",
+      "ttft_ms": 18.889,
+      "usd_per_1m_useful_tokens": 1.8587
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 395.825,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_rust_cold_per_req",
+      "model_class": "4B",
+      "ttft_ms": 19.596,
+      "usd_per_1m_useful_tokens": 1.8597
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 389.004,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_python_cold_per_req",
+      "model_class": "4B",
+      "ttft_ms": 42.279,
+      "usd_per_1m_useful_tokens": 1.8923
+    },
+    {
+      "adversarial_rejection_pct": 0,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 265.244,
+      "hanzo_control_plane_calls": 0,
+      "mode": "plaintext_unattested_control",
+      "model_class": "9B",
+      "ttft_ms": 34,
+      "usd_per_1m_useful_tokens": 2.6077
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 255.524,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_rust_session_1000x",
+      "model_class": "9B",
+      "ttft_ms": 35.371,
+      "usd_per_1m_useful_tokens": 2.8808
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 255.434,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_rust_cold_per_req",
+      "model_class": "9B",
+      "ttft_ms": 36.078,
+      "usd_per_1m_useful_tokens": 2.8818
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 252.576,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_python_cold_per_req",
+      "model_class": "9B",
+      "ttft_ms": 58.761,
+      "usd_per_1m_useful_tokens": 2.9144
+    },
+    {
+      "adversarial_rejection_pct": 0,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 113.986,
+      "hanzo_control_plane_calls": 0,
+      "mode": "plaintext_unattested_control",
+      "model_class": "27B",
+      "ttft_ms": 78,
+      "usd_per_1m_useful_tokens": 6.068
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 110.556,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_rust_session_1000x",
+      "model_class": "27B",
+      "ttft_ms": 80.497,
+      "usd_per_1m_useful_tokens": 6.6582
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 110.54,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_rust_cold_per_req",
+      "model_class": "27B",
+      "ttft_ms": 81.204,
+      "usd_per_1m_useful_tokens": 6.6593
+    },
+    {
+      "adversarial_rejection_pct": 100,
+      "completion_rate_pct": 100,
+      "effective_tok_per_s": 110.001,
+      "hanzo_control_plane_calls": 0,
+      "mode": "hanzo_attest_python_cold_per_req",
+      "model_class": "27B",
+      "ttft_ms": 103.887,
+      "usd_per_1m_useful_tokens": 6.6919
+    }
+  ],
+  "negative_regime_1_tiny_prompt_cold_reattest": {
+    "base_ttft_ms": 8,
+    "prompt_bytes": 64,
+    "prompt_tokens": 16,
+    "python_cold_per_request_ms": 23.469,
+    "python_cold_ttft_tax_pct": 293.356,
+    "rust_cold_per_request_us": 799.948,
+    "rust_cold_ttft_tax_pct": 9.999,
+    "rust_cold_vs_session_slowdown_x": 11.343,
+    "rust_session_cached_us": 70.524
+  },
+  "negative_regime_2_large_context_aead": [
+    {
+      "decrypt_ms": 4.959,
+      "encrypt_ms": 6.759,
+      "encrypt_throughput_mib_per_s": 147.941,
+      "payload_bytes": 1048576,
+      "payload_mib": 1,
+      "roundtrip_aead_ms": 11.719
+    },
+    {
+      "decrypt_ms": 10.393,
+      "encrypt_ms": 12.199,
+      "encrypt_throughput_mib_per_s": 163.942,
+      "payload_bytes": 2097152,
+      "payload_mib": 2,
+      "roundtrip_aead_ms": 22.592
+    },
+    {
+      "decrypt_ms": 20.778,
+      "encrypt_ms": 23.961,
+      "encrypt_throughput_mib_per_s": 166.939,
+      "payload_bytes": 4194304,
+      "payload_mib": 4,
+      "roundtrip_aead_ms": 44.739
+    }
+  ],
+  "negative_regime_3_python_vs_rust_throughput": {
+    "cold_handshake_rust_speedup_x": 33.002,
+    "python_cold_verify_and_encrypt_us": 23468.504,
+    "python_cold_verify_us": 15467.802,
+    "python_session_encrypt_us": 3169.366,
+    "rust_cold_verify_and_encrypt_us": 711.128,
+    "rust_cold_verify_us": 572.013,
+    "rust_session_encrypt_us": 5.421,
+    "session_encrypt_rust_speedup_x": 584.684,
+    "verify_rust_speedup_x": 27.041
+  },
+  "rust_latency_us": {
+    "cold_client_verify_and_encrypt_mean_us": 711.128,
+    "cold_e2e_p99_us": 1097.326,
+    "cold_e2e_verify_encrypt_decrypt_mean_us": 785.912,
+    "cold_verify_mean_us": 572.013,
+    "cold_verify_p50_us": 554.512,
+    "cold_verify_p95_us": 647.516,
+    "cold_verify_p99_us": 724.125,
+    "cold_verify_per_sec": 1748.211,
+    "session_e2e_encrypt_decrypt_mean_us": 78.166,
+    "session_e2e_p99_us": 130.293,
+    "session_encrypt_mean_us": 5.421
+  },
+  "seed": 1350,
+  "trust_and_interop_summary": {
+    "adversarial_rejected_python": 30,
+    "adversarial_rejected_rust": 30,
+    "adversarial_vectors_tested": 30,
+    "cross_language_exact_parity": 33,
+    "deterministic_wire_ciphertext_parity": true,
+    "mandatory_hanzo_control_plane_calls": 0,
+    "python_to_rust_aead_interop": true,
+    "rust_to_python_aead_interop": true,
+    "sovereign_bundle_lossless_roundtrip": true,
+    "total_differential_cases": 33,
+    "valid_multi_tee_cases": 3
+  }
+}
