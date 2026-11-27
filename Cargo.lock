@@ -3194,6 +3194,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hanzo-cascade-attn"
+version = "1.7.109"
+
+[[package]]
 name = "hanzo-cli"
 version = "1.7.109"
 dependencies = [

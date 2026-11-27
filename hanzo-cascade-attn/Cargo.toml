@@ -1,0 +1,17 @@
+[package]
+name = "hanzo-cascade-attn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clean-room hardware-specialised tiled online-softmax paged attention, shared-prefix cascade LSE merge, fused ragged prefill/decode, and per-architecture hybrid serving evaluation (HIP-1346)"
+repository.workspace = true
+license = "Apache-2.0"
+keywords = ["attention", "cascade", "paged-attention", "ragged", "llm"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+
+[[bin]]
+name = "cascade-attn-bench"
+path = "src/bin/cascade-attn-bench.rs"
